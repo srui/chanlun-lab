@@ -1,14 +1,41 @@
 // ====== State ======
 const S = {
-  strokes: [],
+  // 主周期数据
+  primary: {
+    klines: null,
+    fractals: null,
+    turningPoints: [],
+    strokes: [],
+    segments: [],
+    zhongshuList: [],
+    segmentZhongshu: [],
+    higherSegments: [],
+    buySellPoints: [],
+    macd: null,
+    divergencePoints: [],
+  },
+
+  // 上下文周期数据（只读）
+  context: {
+    klines: null,
+    fractals: null,
+    turningPoints: [],
+    segments: [],
+    zhongshu: [],
+    interval: null,
+  },
+
+  // 元数据
+  currentSymbol: null,
+  primaryInterval: null,
+  contextInterval: null,
   deletedTurningPoints: new Set(),
-  turningPoints: [],
-  segments: [],
+
+  // UI 状态
   drawingMode: false,
   drawStart: null,
   chartCoords: [],
   chartLayout: null,
-  zhongshuList: [],
   drawZsMode: false,
   zsDrawStart: null,
   isDraggingZs: false,
@@ -16,17 +43,10 @@ const S = {
   zsDragEdge: null,
   isDragging: false,
   dragIdx: -1,
-  currentKlines: null,
-  currentSymbol: null,
-  currentInterval: null,
-  currentFractals: null,
-  segmentZhongshu: [],
-  higherSegments: [],
-  buySellPoints: [],
-  divergencePoints: [],
   showSegZs: true,
   showBuySell: true,
   showKlines: true,
+  showContext: true,
   drawSegZsMode: false,
   segZsDrawStart: null,
   drawHigherMode: false,
@@ -39,17 +59,21 @@ const S = {
   panStartX: 0,
   panViewStart: 0,
   panViewEnd: 0,
+  autoRefresh: false,
+  autoRefreshTimer: null,
+  lastSignalState: null,
 };
 
 // ====== UI Helpers ======
-function resetUIState() {
-  S.segments = [];
+function resetPrimary() {
+  S.primary.segments = [];
   S.deletedTurningPoints = new Set();
-  S.zhongshuList = [];
-  S.segmentZhongshu = [];
-  S.higherSegments = [];
-  S.buySellPoints = [];
-  S.divergencePoints = [];
+  S.primary.zhongshuList = [];
+  S.primary.segmentZhongshu = [];
+  S.primary.higherSegments = [];
+  S.primary.buySellPoints = [];
+  S.primary.macd = null;
+  S.primary.divergencePoints = [];
   S.klineViewStart = 0;
   S.klineViewEnd = 0;
   S.drawStart = null;
@@ -69,10 +93,8 @@ function resetUIState() {
   document.getElementById('drawHigherBtn').textContent = '手动画';
   document.getElementById('drawStrokeBtn').textContent = '手动画笔';
   document.getElementById('emptyState').style.display = 'none';
-  // Conditionally enable based on turning point count (set later by caller)
-  const tpReady = S.turningPoints.length >= 2;
-  const segReady = S.turningPoints.length >= 8;
-  const segDrawReady = S.turningPoints.length >= 4;
+  const tpReady = S.primary.turningPoints.length >= 2;
+  const segReady = S.primary.turningPoints.length >= 8;
   document.getElementById('drawBtn').disabled = !tpReady;
   document.getElementById('autoSegBtn').disabled = !segReady;
   document.getElementById('autoZsBtn').disabled = !segReady;
@@ -87,8 +109,23 @@ function resetUIState() {
   document.getElementById('undoSegZsBtn').disabled = true;
   document.getElementById('undoHigherBtn').disabled = true;
   document.getElementById('undoStrokeBtn').disabled = true;
-  document.getElementById('autoStrokeBtn').disabled = !S.currentKlines;
+  document.getElementById('autoStrokeBtn').disabled = !S.primary.klines;
 }
+
+function resetAll() {
+  S.primary.klines = null;
+  S.primary.fractals = null;
+  S.primary.turningPoints = [];
+  S.primary.strokes = [];
+  S.currentSymbol = null;
+  S.primaryInterval = null;
+  S.contextInterval = null;
+  S.context = { klines: null, fractals: null, turningPoints: [], segments: [], zhongshu: [], interval: null };
+  resetPrimary();
+}
+
+// Legacy alias
+function resetUIState() { resetPrimary(); }
 
 function getMinSegmentRatio() {
   return (parseFloat(document.getElementById('minSegRatio').value) || 0) / 100;
@@ -110,7 +147,7 @@ async function loadBinanceKlines() {
   statusEl.style.color = '#ffc832';
 
   try {
-    const resp = await fetch('/api/compute/all', {
+    const resp = await fetch('/api/compute/dual', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({symbol, interval, limit, minSegmentRatio: getMinSegmentRatio(), minKlineGap: getMinKlineGap()})
@@ -118,26 +155,62 @@ async function loadBinanceKlines() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || '未知错误');
 
-    S.currentKlines = data.klines;
-    S.currentSymbol = data.symbol;
-    S.currentInterval = data.interval;
-    S.currentFractals = data.fractals || [];
+    // 重置全部状态
+    resetAll();
 
-    // Reset UI state first, then set data
-    resetUIState();
-    S.turningPoints = data.turningPoints;
-    S.strokes = data.strokes;
-    // Segments/zhongshu/buy-sell left empty — user adds via sidebar buttons
+    // 主周期数据
+    const primary = data.primary;
 
+    // 上下文周期数据（只读）
+    if (data.context) {
+      S.context.klines = data.context.klines;
+      S.context.fractals = data.context.fractals || null;
+      S.context.turningPoints = data.context.turningPoints || [];
+      S.context.segments = data.context.segments || [];
+      S.context.zhongshu = data.context.zhongshu || [];
+      S.context.interval = data.context.interval;
+      S.contextInterval = data.context.interval;
+    }
+
+    resetPrimary(); // 设置按钮状态（会清空 segments 等）
+
+    // 在 resetPrimary 之后存入数据
+    S.primary.klines = primary.klines;
+    S.currentSymbol = primary.symbol;
+    S.primaryInterval = primary.interval;
+    S.primary.fractals = primary.fractals || [];
+    S.primary.turningPoints = primary.turningPoints;
+    S.primary.strokes = primary.strokes;
+    S.primary.macd = primary.macd || null;
+    S.primary.buySellPoints = primary.buySellPoints || [];
+    S.primary.divergencePoints = primary.divergences || [];
     renderStrokeList();
     drawChart();
+    updateContextPanel();
 
-    statusEl.textContent = `${symbol} ${interval} · ${data.klines.length} K线 · ${data.turningPoints.length} 转折点`;
+    // Auto-restore saved annotations
+    await loadSavedAnnotation();
+    if (S.primary.segments.length || S.primary.zhongshuList.length || S.primary.segmentZhongshu.length || S.primary.higherSegments.length) {
+      drawChart();
+      renderSegList();
+      renderZhongshuList();
+      renderSegZsList();
+      renderHigherList();
+    }
+
+    let statusText = `${symbol} ${interval} · ${primary.klines.length} K线 · ${primary.turningPoints.length} 转折点`;
+    if (S.context.interval) statusText += ` · 上下文: ${S.context.interval}`;
+    statusEl.textContent = statusText;
     statusEl.style.color = '#51cf66';
-    if (data.warning) {
-      statusEl.textContent += ' ⚠ ' + data.warning;
+    if (primary.warning) {
+      statusEl.textContent += ' ⚠ ' + primary.warning;
       statusEl.style.color = '#ffc832';
     }
+
+    // Refresh signal panel
+    refreshSignal();
+    // Restart auto-refresh with new interval if enabled
+    if (S.autoRefresh) startAutoRefresh();
   } catch (err) {
     statusEl.textContent = '错误: ' + err.message;
     statusEl.style.color = '#ff6b6b';
@@ -145,7 +218,7 @@ async function loadBinanceKlines() {
 }
 
 async function autoDetectStrokes() {
-  if (!S.currentKlines) { alert('请先加载K线数据'); return; }
+  if (!S.primary.klines) { alert('请先加载K线数据'); return; }
   const statusEl = document.getElementById('binanceStatus');
   try {
     statusEl.textContent = '计算笔...';
@@ -153,27 +226,27 @@ async function autoDetectStrokes() {
     const resp = await fetch('/api/compute/strokes', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ klines: S.currentKlines, minKlineGap: getMinKlineGap() })
+      body: JSON.stringify({ klines: S.primary.klines, minKlineGap: getMinKlineGap() })
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || '未知错误');
 
     resetUIState();
-    S.currentFractals = data.fractals || [];
-    S.turningPoints = data.turningPoints;
-    S.strokes = data.strokes;
+    S.primary.fractals = data.fractals || [];
+    S.primary.turningPoints = data.turningPoints;
+    S.primary.strokes = data.strokes;
 
     renderStrokeList();
     drawChart();
-    document.getElementById('undoStrokeBtn').disabled = S.turningPoints.length === 0;
+    document.getElementById('undoStrokeBtn').disabled = S.primary.turningPoints.length === 0;
 
-    statusEl.textContent = `${S.currentSymbol} ${S.currentInterval} · ${S.currentKlines.length} K线 · ${S.turningPoints.length} 笔`;
+    statusEl.textContent = `${S.currentSymbol} ${S.primaryInterval} · ${S.primary.klines.length} K线 · ${S.primary.turningPoints.length} 笔`;
     statusEl.style.color = '#51cf66';
 
-    document.getElementById('autoSegBtn').disabled = S.turningPoints.length < 8;
-    document.getElementById('drawBtn').disabled = S.turningPoints.length < 2;
-    document.getElementById('autoZsBtn').disabled = S.turningPoints.length < 4;
-    document.getElementById('drawZsBtn').disabled = S.turningPoints.length < 2;
+    document.getElementById('autoSegBtn').disabled = S.primary.turningPoints.length < 8;
+    document.getElementById('drawBtn').disabled = S.primary.turningPoints.length < 2;
+    document.getElementById('autoZsBtn').disabled = S.primary.turningPoints.length < 4;
+    document.getElementById('drawZsBtn').disabled = S.primary.turningPoints.length < 2;
   } catch (err) {
     statusEl.textContent = '计算笔失败: ' + err.message;
     statusEl.style.color = '#ff6b6b';
@@ -181,62 +254,67 @@ async function autoDetectStrokes() {
 }
 
 async function autoDetectSegments() {
-  if (S.turningPoints.length < 8) { alert('至少需要8个转折点才能自动画段（当前' + S.turningPoints.length + '个）'); return; }
+  if (S.primary.turningPoints.length < 8) { alert('至少需要8个转折点才能自动画段（当前' + S.primary.turningPoints.length + '个）'); return; }
   try {
     const resp = await fetch('/api/compute/segments', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({turningPoints: S.turningPoints, minSegmentRatio: getMinSegmentRatio()})
+      body: JSON.stringify({turningPoints: S.primary.turningPoints, minSegmentRatio: getMinSegmentRatio()})
     });
     const data = await resp.json();
-    S.segments = data.segments;
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    S.primary.segments = data.segments;
     redrawSegments();
     renderSegList();
     document.getElementById('undoSegBtn').disabled = false;
-    document.getElementById('autoSegZsBtn').disabled = S.segments.length < 3;
-    document.getElementById('drawSegZsBtn').disabled = S.segments.length < 3;
-    document.getElementById('autoHigherBtn').disabled = S.segments.length < 4;
-    document.getElementById('drawHigherBtn').disabled = S.segments.length < 3;
+    document.getElementById('autoSegZsBtn').disabled = S.primary.segments.length < 3;
+    document.getElementById('drawSegZsBtn').disabled = S.primary.segments.length < 3;
+    document.getElementById('autoHigherBtn').disabled = S.primary.segments.length < 4;
+    document.getElementById('drawHigherBtn').disabled = S.primary.segments.length < 3;
+    autoSaveAnnotation();
   } catch (err) {
     alert('计算失败: ' + err.message);
   }
 }
 
 async function autoDetectZhongshu() {
-  if (S.turningPoints.length < 4) { alert('至少需要4个点'); return; }
+  if (S.primary.turningPoints.length < 4) { alert('至少需要4个点'); return; }
   try {
     const resp = await fetch('/api/compute/zhongshu', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({turningPoints: S.turningPoints, segments: S.segments, minSegmentRatio: getMinSegmentRatio()})
+      body: JSON.stringify({turningPoints: S.primary.turningPoints, segments: S.primary.segments, minSegmentRatio: getMinSegmentRatio()})
     });
     const data = await resp.json();
-    S.zhongshuList = data.zhongshu;
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    S.primary.zhongshuList = data.zhongshu;
     drawChart();
     renderZhongshuList();
-    document.getElementById('undoZsBtn').disabled = S.zhongshuList.length === 0;
-    document.getElementById('autoBuySellBtn').disabled = S.zhongshuList.length === 0;
+    document.getElementById('undoZsBtn').disabled = S.primary.zhongshuList.length === 0;
+    document.getElementById('autoBuySellBtn').disabled = S.primary.zhongshuList.length === 0;
+    autoSaveAnnotation();
   } catch (err) {
     alert('计算失败: ' + err.message);
   }
 }
 
 async function recomputeWithRatio() {
-  if (S.turningPoints.length < 4) { alert('至少需要4个点'); return; }
+  if (S.primary.turningPoints.length < 4) { alert('至少需要4个点'); return; }
   try {
     const ratio = getMinSegmentRatio();
     const resp = await fetch('/api/compute/recompute', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({turningPoints: S.turningPoints, minSegmentRatio: ratio})
+      body: JSON.stringify({turningPoints: S.primary.turningPoints, minSegmentRatio: ratio})
     });
     const data = await resp.json();
-    S.segments = data.segments;
-    S.zhongshuList = data.zhongshu;
-    S.segmentZhongshu = data.segmentZhongshu;
-    S.higherSegments = data.higherSegments;
-    S.buySellPoints = data.buySellPoints || [];
-    detectDivergences();
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    S.primary.segments = data.segments;
+    S.primary.zhongshuList = data.zhongshu;
+    S.primary.segmentZhongshu = data.segmentZhongshu;
+    S.primary.higherSegments = data.higherSegments;
+    S.primary.buySellPoints = data.buySellPoints || [];
+    S.primary.divergencePoints = data.divergences || [];
 
     drawChart();
     renderSegList();
@@ -244,68 +322,70 @@ async function recomputeWithRatio() {
     renderSegZsList();
     renderHigherList();
     renderBsList();
-    document.getElementById('undoSegBtn').disabled = S.segments.length === 0;
-    document.getElementById('undoZsBtn').disabled = S.zhongshuList.length === 0;
-    document.getElementById('autoSegZsBtn').disabled = S.segments.length < 3;
-    document.getElementById('drawSegZsBtn').disabled = S.segments.length < 3;
-    document.getElementById('undoSegZsBtn').disabled = S.segmentZhongshu.length === 0;
-    document.getElementById('autoHigherBtn').disabled = S.segments.length < 4;
-    document.getElementById('drawHigherBtn').disabled = S.segments.length < 3;
-    document.getElementById('undoHigherBtn').disabled = S.higherSegments.length === 0;
-    document.getElementById('autoBuySellBtn').disabled = S.zhongshuList.length === 0;
+    document.getElementById('undoSegBtn').disabled = S.primary.segments.length === 0;
+    document.getElementById('undoZsBtn').disabled = S.primary.zhongshuList.length === 0;
+    document.getElementById('autoSegZsBtn').disabled = S.primary.segments.length < 3;
+    document.getElementById('drawSegZsBtn').disabled = S.primary.segments.length < 3;
+    document.getElementById('undoSegZsBtn').disabled = S.primary.segmentZhongshu.length === 0;
+    document.getElementById('autoHigherBtn').disabled = S.primary.segments.length < 4;
+    document.getElementById('drawHigherBtn').disabled = S.primary.segments.length < 3;
+    document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
+    document.getElementById('autoBuySellBtn').disabled = S.primary.zhongshuList.length === 0;
+    autoSaveAnnotation();
   } catch (err) {
     alert('计算失败: ' + err.message);
   }
 }
 
 async function recomputeSegmentLevel() {
-  if (S.turningPoints.length < 4 || S.segments.length < 3) {
-    S.segmentZhongshu = [];
-    S.higherSegments = [];
+  if (S.primary.turningPoints.length < 4 || S.primary.segments.length < 3) {
+    S.primary.segmentZhongshu = [];
+    S.primary.higherSegments = [];
     return;
   }
   try {
     const resp = await fetch('/api/compute/segment-level', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({turningPoints: S.turningPoints, segments: S.segments, minSegmentRatio: getMinSegmentRatio()})
+      body: JSON.stringify({turningPoints: S.primary.turningPoints, segments: S.primary.segments, minSegmentRatio: getMinSegmentRatio()})
     });
     const data = await resp.json();
-    S.segmentZhongshu = data.segmentZhongshu;
-    S.higherSegments = data.higherSegments;
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    S.primary.segmentZhongshu = data.segmentZhongshu;
+    S.primary.higherSegments = data.higherSegments;
   } catch (err) {
     console.error('段级别计算失败:', err);
   }
 }
 
 async function autoDetectSegmentZhongshu() {
-  if (S.turningPoints.length < 4) return;
+  if (S.primary.turningPoints.length < 4) return;
   await recomputeSegmentLevel();
   drawChart();
   renderSegZsList();
   renderHigherList();
-  document.getElementById('undoSegZsBtn').disabled = S.segmentZhongshu.length === 0;
-  document.getElementById('undoHigherBtn').disabled = S.higherSegments.length === 0;
+  document.getElementById('undoSegZsBtn').disabled = S.primary.segmentZhongshu.length === 0;
+  document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
 }
 
 async function autoDetectHigherSegments() {
-  if (S.turningPoints.length < 4) return;
+  if (S.primary.turningPoints.length < 4) return;
   await recomputeSegmentLevel();
   drawChart();
   renderSegZsList();
   renderHigherList();
-  document.getElementById('undoHigherBtn').disabled = S.higherSegments.length === 0;
-  document.getElementById('undoSegZsBtn').disabled = S.segmentZhongshu.length === 0;
+  document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
+  document.getElementById('undoSegZsBtn').disabled = S.primary.segmentZhongshu.length === 0;
 }
 
 function renderSegZsList() {
   const list = document.getElementById('segZsList');
   list.innerHTML = '';
-  S.segmentZhongshu.forEach((zs, i) => {
+  S.primary.segmentZhongshu.forEach((zs, i) => {
     const div = document.createElement('div');
     div.className = 'zs-item';
-    const from = S.turningPoints[zs.fromIdx];
-    const to = S.turningPoints[zs.toIdx];
+    const from = S.primary.turningPoints[zs.fromIdx];
+    const to = S.primary.turningPoints[zs.toIdx];
     div.innerHTML = `
       <span class="range" style="color:#4a9eff">ZG=${Math.round(zs.zg * 100) / 100} ZD=${Math.round(zs.zd * 100) / 100}</span>
       <span class="del" onclick="removeSegZs(${i})">×</span>
@@ -317,9 +397,9 @@ function renderSegZsList() {
 function renderHigherList() {
   const list = document.getElementById('higherList');
   list.innerHTML = '';
-  S.higherSegments.forEach((seg, i) => {
-    const from = S.turningPoints[seg.fromIdx];
-    const to = S.turningPoints[seg.toIdx];
+  S.primary.higherSegments.forEach((seg, i) => {
+    const from = S.primary.turningPoints[seg.fromIdx];
+    const to = S.primary.turningPoints[seg.toIdx];
     if (from === undefined || to === undefined) return;
     const isUp = to > from;
     const div = document.createElement('div');
@@ -334,36 +414,38 @@ function renderHigherList() {
 }
 
 async function recomputeBuySell() {
-  if (S.turningPoints.length < 4 || S.zhongshuList.length === 0) {
-    S.buySellPoints = [];
+  if (S.primary.turningPoints.length < 4 || S.primary.zhongshuList.length === 0) {
+    S.primary.buySellPoints = [];
     return;
   }
   try {
     const resp = await fetch('/api/compute/buy-sell', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({turningPoints: S.turningPoints, segments: S.segments, minSegmentRatio: getMinSegmentRatio()})
+      body: JSON.stringify({turningPoints: S.primary.turningPoints, segments: S.primary.segments, minSegmentRatio: getMinSegmentRatio()})
     });
     const data = await resp.json();
-    S.buySellPoints = data.buySellPoints || [];
-    detectDivergences();
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    S.primary.buySellPoints = data.buySellPoints || [];
+    S.primary.divergencePoints = [];
   } catch (err) {
-    S.buySellPoints = [];
-    S.divergencePoints = [];
+    S.primary.buySellPoints = [];
+    S.primary.divergencePoints = [];
   }
 }
 
 async function autoDetectBuySell() {
-  if (S.turningPoints.length < 4) { alert('至少需要4个点'); return; }
+  if (S.primary.turningPoints.length < 4) { alert('至少需要4个点'); return; }
   try {
     const resp = await fetch('/api/compute/buy-sell', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({turningPoints: S.turningPoints, segments: S.segments, minSegmentRatio: getMinSegmentRatio()})
+      body: JSON.stringify({turningPoints: S.primary.turningPoints, segments: S.primary.segments, minSegmentRatio: getMinSegmentRatio()})
     });
     const data = await resp.json();
-    S.buySellPoints = data.buySellPoints || [];
-    detectDivergences();
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    S.primary.buySellPoints = data.buySellPoints || [];
+    S.primary.divergencePoints = [];
     drawChart();
     renderBsList();
   } catch (err) {
@@ -374,16 +456,16 @@ async function autoDetectBuySell() {
 function renderBsList() {
   const list = document.getElementById('bsList');
   list.innerHTML = '';
-  if (!S.buySellPoints.length) return;
+  if (!S.primary.buySellPoints.length) return;
   const divByIdx = {};
-  S.divergencePoints.forEach(d => { divByIdx[d.idx] = d; });
-  S.buySellPoints.forEach(p => {
-    const price = S.turningPoints[p.idx];
+  S.primary.divergencePoints.forEach(d => { divByIdx[d.idx] = d; });
+  S.primary.buySellPoints.forEach(p => {
+    const price = S.primary.turningPoints[p.idx];
     if (price === undefined) return;
     const isBuy = p.type === 'buy';
     const tag = isBuy ? p.label : p.label + "'";
     const typeName = isBuy ? '买' : '卖';
-    const divTag = divByIdx[p.idx] ? (divByIdx[p.idx].type === 'top' ? ' 顶背驰' : ' 底背驰') : '';
+    const divTag = p.hasDivergence ? (isBuy ? ' 底背驰' : ' 顶背驰') : '';
     const div = document.createElement('div');
     div.className = 'seg-item';
     div.innerHTML = `
@@ -418,16 +500,350 @@ function toggleKlines() {
   drawChart();
 }
 
-function drawBuySellMarkers() {
-  if (!S.chartLayout || S.chartCoords.length === 0 || !S.buySellPoints.length) return;
+function toggleContext() {
+  S.showContext = !S.showContext;
+  const btn = document.getElementById('contextToggle');
+  btn.textContent = S.showContext ? '隐藏' : '显示';
+  drawChart();
+}
 
-  // Build divergence lookup by idx
+function updateContextPanel() {
+  const panel = document.getElementById('contextPanel');
+  if (!S.context.interval) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  document.getElementById('contextIntervalLabel').textContent = S.context.interval;
+  document.getElementById('contextSegCount').textContent = (S.context.segments || []).length;
+  document.getElementById('contextZsCount').textContent = (S.context.zhongshu || []).length;
+}
+
+// ====== Annotation Auto-Save ======
+let _saveTimer = null;
+
+function autoSaveAnnotation() {
+  if (!S.currentSymbol || !S.primaryInterval) return;
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    const data = {
+      symbol: S.currentSymbol,
+      interval: S.primaryInterval,
+      turningPoints: S.primary.turningPoints,
+      segments: S.primary.segments,
+      zhongshu: S.primary.zhongshuList,
+      segmentZhongshu: S.primary.segmentZhongshu,
+      higherSegments: S.primary.higherSegments,
+      deletedTurningPoints: [...S.deletedTurningPoints],
+    };
+    fetch('/api/annotation/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    }).catch(() => {});
+  }, 2000);
+}
+
+async function loadSavedAnnotation() {
+  if (!S.currentSymbol || !S.primaryInterval) return;
+  try {
+    const resp = await fetch(`/api/annotation/load?symbol=${encodeURIComponent(S.currentSymbol)}&interval=${encodeURIComponent(S.primaryInterval)}`);
+    const data = await resp.json();
+    if (!data.annotation) return;
+
+    const a = data.annotation;
+    const tpLen = S.primary.turningPoints.length;
+
+    // 校验索引范围
+    const validateIdx = (idx) => typeof idx === 'number' && idx >= 0 && idx < tpLen;
+    const validateRange = (item) => validateIdx(item.fromIdx) && validateIdx(item.toIdx);
+
+    if (a.turningPoints && a.turningPoints.length === tpLen) {
+      // 转折点数量匹配，恢复标注
+      if (a.segments) S.primary.segments = a.segments.filter(validateRange);
+      if (a.zhongshu) S.primary.zhongshuList = a.zhongshu.filter(validateRange);
+      if (a.segmentZhongshu) S.primary.segmentZhongshu = a.segmentZhongshu.filter(validateRange);
+      if (a.higherSegments) S.primary.higherSegments = a.higherSegments.filter(validateRange);
+      if (a.deletedTurningPoints) S.deletedTurningPoints = new Set(a.deletedTurningPoints.filter(i => i < tpLen));
+    }
+  } catch (e) {
+    // 静默失败
+  }
+}
+
+function clearSavedAnnotation() {
+  if (!S.currentSymbol || !S.primaryInterval) return;
+  fetch(`/api/annotation/clear?symbol=${encodeURIComponent(S.currentSymbol)}&interval=${encodeURIComponent(S.primaryInterval)}`, { method: 'DELETE' })
+    .catch(() => {});
+}
+
+// ====== Signal Panel ======
+async function refreshSignal() {
+  if (!S.currentSymbol || !S.primaryInterval) return;
+  const btn = document.getElementById('signalRefreshBtn');
+  btn.disabled = true;
+  btn.textContent = '计算中...';
+  try {
+    const resp = await fetch('/api/signal', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        symbol: S.currentSymbol,
+        interval: S.primaryInterval,
+        contextInterval: S.contextInterval,
+        minSegmentRatio: getMinSegmentRatio(),
+        minKlineGap: getMinKlineGap()
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+    renderSignalPanel(data.signal);
+  } catch (err) {
+    console.error('信号计算失败:', err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '刷新信号';
+  }
+}
+
+function renderSignalPanel(signal) {
+  const el = document.getElementById('signalContent');
+  if (!signal) { el.innerHTML = '<div class="signal-detail">无数据</div>'; return; }
+
+  const dir = signal.direction || 'neutral';
+  const state = signal.state || 'IDLE';
+  const setup = signal.activeSetup;
+
+  // Direction arrow
+  const dirArrow = dir === 'long' ? '↑' : dir === 'short' ? '↓' : '–';
+  const dirLabel = dir === 'long' ? '做多' : dir === 'short' ? '做空' : '震荡';
+
+  // State label
+  const stateLabels = {
+    'IDLE': '无信号',
+    'WATCHING': '发现机会',
+    'CONFIRMING': '等待确认',
+    'READY': '可以入场'
+  };
+
+  let html = '';
+  html += `<div class="signal-direction ${dir}">${dirArrow} ${dirLabel}</div>`;
+  html += `<div class="signal-state ${state.toLowerCase()}">${stateLabels[state] || state}</div>`;
+
+  // Details
+  html += '<div class="signal-detail">';
+  // Context info
+  const ctxSeg = signal.contextSegments || 0;
+  const ctxDir = signal.contextDirection || 'neutral';
+  const ctxDirLabel = ctxDir === 'long' ? '上升段' : ctxDir === 'short' ? '下降段' : '无方向';
+  const ctxOk = ctxDir !== 'neutral';
+  html += `<div>${ctxOk ? '<span class="check">✓</span>' : '<span class="cross">✗</span>'} 上下文 (${ctxDirLabel})</div>`;
+
+  // Primary zhongshu
+  const zsCount = signal.primaryZhongshu || 0;
+  html += `<div>${zsCount > 0 ? '<span class="check">✓</span>' : '<span class="wait">○</span>'} 主周期中枢 ×${zsCount}</div>`;
+
+  // Buy/sell points
+  const bsCount = signal.primaryBuySell || 0;
+  html += `<div>${bsCount > 0 ? '<span class="check">✓</span>' : '<span class="wait">○</span>'} 买卖点 ×${bsCount}</div>`;
+
+  html += '</div>';
+
+  // Active setup details
+  if (setup) {
+    const typeLabel = setup.type === 'buy' ? '买点' : '卖点';
+    const divStar = setup.hasDivergence ? '<span class="div-star"> ★ 背驰确认</span>' : '<span class="wait"> △ 暂无背驰</span>';
+    html += '<div class="signal-setup">';
+    html += `<div>${typeLabel} ${setup.label} ${divStar}</div>`;
+    if (setup.price !== null && setup.price !== undefined) {
+      html += `<div class="price">${Math.round(setup.price * 100) / 100}</div>`;
+    }
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+
+  // Detect state change for animation
+  const stateKey = `${signal.direction}:${signal.state}`;
+  if (S.lastSignalState && S.lastSignalState !== stateKey) {
+    el.style.transition = 'background 0.3s';
+    el.style.background = 'rgba(255,200,50,0.15)';
+    setTimeout(() => { el.style.background = ''; }, 800);
+  }
+  S.lastSignalState = stateKey;
+}
+
+async function toggleAutoRefresh() {
+  S.autoRefresh = !S.autoRefresh;
+  const btn = document.getElementById('autoRefreshBtn');
+  const statusEl = document.getElementById('pollStatus');
+
+  if (S.autoRefresh) {
+    btn.textContent = '停止刷新';
+    btn.className = 'btn btn-danger';
+    btn.style.flex = '1';
+    startAutoRefresh();
+  } else {
+    btn.textContent = '自动刷新';
+    btn.className = 'btn btn-warn';
+    btn.style.flex = '1';
+    stopAutoRefresh();
+    statusEl.textContent = '';
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!S.autoRefresh || !S.primaryInterval) return;
+
+  // Fetch polling interval from backend
+  fetch(`/api/config/poll-interval?interval=${encodeURIComponent(S.primaryInterval)}`)
+    .then(r => r.json())
+    .then(cfg => {
+      const seconds = cfg.pollSeconds || 60;
+      const statusEl = document.getElementById('pollStatus');
+      statusEl.textContent = `每 ${seconds}s 自动刷新`;
+      S.autoRefreshTimer = setInterval(() => {
+        if (S.autoRefresh && S.currentSymbol && S.primaryInterval) {
+          refreshSignal();
+        }
+      }, seconds * 1000);
+    })
+    .catch(() => {
+      // Fallback to 60s
+      S.autoRefreshTimer = setInterval(() => {
+        if (S.autoRefresh && S.currentSymbol && S.primaryInterval) {
+          refreshSignal();
+        }
+      }, 60000);
+    });
+}
+
+function stopAutoRefresh() {
+  if (S.autoRefreshTimer) {
+    clearInterval(S.autoRefreshTimer);
+    S.autoRefreshTimer = null;
+  }
+}
+
+// ====== Watchlist ======
+function getWatchlist() {
+  try { return JSON.parse(localStorage.getItem('chanlun_watchlist') || '[]'); }
+  catch { return []; }
+}
+
+function saveWatchlist(list) {
+  localStorage.setItem('chanlun_watchlist', JSON.stringify(list));
+}
+
+function addToWatchlist() {
+  const input = document.getElementById('watchlistInput');
+  const sym = (input.value || '').trim().toUpperCase();
+  if (!sym) return;
+  const list = getWatchlist();
+  if (list.includes(sym)) { input.value = ''; return; }
+  list.push(sym);
+  saveWatchlist(list);
+  input.value = '';
+  renderWatchlist();
+  pollWatchlist();
+}
+
+function removeFromWatchlist(sym) {
+  const list = getWatchlist().filter(s => s !== sym);
+  saveWatchlist(list);
+  renderWatchlist();
+}
+
+function toggleWatchlist() {
+  const container = document.getElementById('watchlistContainer');
+  const btn = document.getElementById('watchlistToggle');
+  const visible = container.style.display !== 'none';
+  container.style.display = visible ? 'none' : 'block';
+  btn.textContent = visible ? 'OFF' : 'ON';
+  btn.className = 'btn-toggle ' + (visible ? 'off' : 'on');
+  if (!visible) pollWatchlist();
+}
+
+function renderWatchlist() {
+  const el = document.getElementById('watchlistItems');
+  const list = getWatchlist();
+  if (!list.length) { el.innerHTML = '<div class="status-text" style="color:#5577aa">空列表</div>'; return; }
+  el.innerHTML = list.map(sym => `
+    <div class="watch-item" id="watch-${sym}" onclick="loadWatchSymbol('${sym}')">
+      <span class="sym">${sym}</span>
+      <span class="dir neutral" id="watch-dir-${sym}">–</span>
+      <span class="st idle" id="watch-st-${sym}">…</span>
+      <span class="del" onclick="event.stopPropagation();removeFromWatchlist('${sym}')">×</span>
+    </div>
+  `).join('');
+}
+
+async function pollWatchlist() {
+  const list = getWatchlist();
+  if (!list.length) return;
+  const interval = S.primaryInterval || '4h';
+  const statusEl = document.getElementById('watchlistStatus');
+  statusEl.textContent = '刷新中...';
+
+  for (const sym of list) {
+    try {
+      const resp = await fetch('/api/signal', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ symbol: sym, interval })
+      });
+      const data = await resp.json();
+      if (data.signal) {
+        const sig = data.signal;
+        const dirEl = document.getElementById(`watch-dir-${sym}`);
+        const stEl = document.getElementById(`watch-st-${sym}`);
+        if (dirEl) {
+          dirEl.textContent = sig.direction === 'long' ? '↑' : sig.direction === 'short' ? '↓' : '–';
+          dirEl.className = 'dir ' + sig.direction;
+        }
+        if (stEl) {
+          const labels = {IDLE: 'IDLE', WATCHING: 'WATCH', CONFIRMING: 'CONF', READY: 'READY'};
+          stEl.textContent = labels[sig.state] || sig.state;
+          stEl.className = 'st ' + sig.state.toLowerCase();
+        }
+      }
+    } catch {
+      // Skip failed symbols
+    }
+  }
+  statusEl.textContent = `已刷新 · ${list.length} 标的`;
+}
+
+function loadWatchSymbol(sym) {
+  document.getElementById('binanceSymbol').value = sym;
+  loadBinanceKlines();
+}
+
+// Auto-poll watchlist every 60s when visible
+setInterval(() => {
+  const container = document.getElementById('watchlistContainer');
+  if (container && container.style.display !== 'none' && getWatchlist().length > 0) {
+    pollWatchlist();
+  }
+}, 60000);
+
+// Initial render
+renderWatchlist();
+
+// Call autoSaveAnnotation after drawChart in edit functions
+function drawChartAndSave() {
+  drawChart();
+  autoSaveAnnotation();
+}
+
+function drawBuySellMarkers() {
+  if (!S.chartLayout || S.chartCoords.length === 0 || !S.primary.buySellPoints.length) return;
+
+  // Build divergence lookup by idx (for type info)
   const divByIdx = {};
-  S.divergencePoints.forEach(d => { divByIdx[d.idx] = d; });
+  S.primary.divergencePoints.forEach(d => { divByIdx[d.idx] = d; });
 
   // Group by idx — one marker per turning point, show all labels
   const grouped = {};
-  S.buySellPoints.forEach(p => {
+  S.primary.buySellPoints.forEach(p => {
     if (!grouped[p.idx]) grouped[p.idx] = [];
     grouped[p.idx].push(p);
   });
@@ -442,7 +858,7 @@ function drawBuySellMarkers() {
     // Determine combined label text
     const buyLabels = points.filter(p => p.type === 'buy').map(p => p.label).sort().join('');
     const sellLabels = points.filter(p => p.type === 'sell').map(p => p.label).sort().map(l => l + "'").join('');
-    const hasDiv = divByIdx[i];
+    const hasDiv = points.some(p => p.hasDivergence) ? divByIdx[i] : null;
 
     // Draw sell markers (red, above the point)
     if (sellLabels) {
@@ -496,16 +912,17 @@ async function exportJSON() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        turningPoints: S.turningPoints,
-        segments: S.segments,
-        zhongshu: S.zhongshuList,
-        klines: S.currentKlines,
+        turningPoints: S.primary.turningPoints,
+        segments: S.primary.segments,
+        zhongshu: S.primary.zhongshuList,
+        klines: S.primary.klines,
         symbol: S.currentSymbol,
-        interval: S.currentInterval,
+        interval: S.primaryInterval,
         minSegmentRatio: getMinSegmentRatio()
       })
     });
     const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '未知错误');
     document.getElementById('exportArea').style.display = 'block';
     document.getElementById('exportText').value = JSON.stringify(data, null, 2);
   } catch (err) {
@@ -517,7 +934,7 @@ async function exportJSON() {
 function renderStrokeList() {
   const list = document.getElementById('strokeList');
   list.innerHTML = '';
-  S.strokes.forEach((s, i) => {
+  S.primary.strokes.forEach((s, i) => {
     const div = document.createElement('div');
     div.className = 'stroke-item';
     div.innerHTML = `
@@ -530,10 +947,10 @@ function renderStrokeList() {
 }
 
 function removeStroke(i) {
-  S.strokes.splice(i, 1);
-  S.turningPoints.splice(i, 1);
-  if (S.currentFractals && i < S.currentFractals.length) {
-    S.currentFractals.splice(i, 1);
+  S.primary.strokes.splice(i, 1);
+  S.primary.turningPoints.splice(i, 1);
+  if (S.primary.fractals && i < S.primary.fractals.length) {
+    S.primary.fractals.splice(i, 1);
   }
   // Update deletedTurningPoints: remove i, shift > i down by 1
   S.deletedTurningPoints.delete(i);
@@ -541,33 +958,43 @@ function removeStroke(i) {
   S.deletedTurningPoints.forEach(v => newSet.add(v > i ? v - 1 : v));
   S.deletedTurningPoints = newSet;
   // Remove segments/zhongshu that reference the deleted point
-  S.segments = S.segments.filter(s => s.fromIdx !== i && s.toIdx !== i).map(s => ({
+  S.primary.segments = S.primary.segments.filter(s => s.fromIdx !== i && s.toIdx !== i).map(s => ({
     ...s,
     fromIdx: s.fromIdx > i ? s.fromIdx - 1 : s.fromIdx,
     toIdx: s.toIdx > i ? s.toIdx - 1 : s.toIdx,
   }));
-  S.zhongshuList = S.zhongshuList.filter(z => z.fromIdx !== i && z.toIdx !== i).map(z => ({
+  S.primary.zhongshuList = S.primary.zhongshuList.filter(z => z.fromIdx !== i && z.toIdx !== i).map(z => ({
     ...z,
     fromIdx: z.fromIdx > i ? z.fromIdx - 1 : z.fromIdx,
     toIdx: z.toIdx > i ? z.toIdx - 1 : z.toIdx,
   }));
-  S.segmentZhongshu = S.segmentZhongshu.filter(s => s.fromIdx !== i && s.toIdx !== i).map(s => ({
+  S.primary.segmentZhongshu = S.primary.segmentZhongshu.filter(s => s.fromIdx !== i && s.toIdx !== i).map(s => ({
     ...s,
     fromIdx: s.fromIdx > i ? s.fromIdx - 1 : s.fromIdx,
     toIdx: s.toIdx > i ? s.toIdx - 1 : s.toIdx,
   }));
-  S.higherSegments = S.higherSegments.filter(s => s.fromIdx !== i && s.toIdx !== i).map(s => ({
+  S.primary.higherSegments = S.primary.higherSegments.filter(s => s.fromIdx !== i && s.toIdx !== i).map(s => ({
     ...s,
     fromIdx: s.fromIdx > i ? s.fromIdx - 1 : s.fromIdx,
     toIdx: s.toIdx > i ? s.toIdx - 1 : s.toIdx,
   }));
-  document.getElementById('undoStrokeBtn').disabled = S.turningPoints.length === 0;
+  // Update stroke fromIdx/toIdx references
+  S.primary.strokes = S.primary.strokes.map(s => ({
+    ...s,
+    fromIdx: s.fromIdx != null ? (s.fromIdx > i ? s.fromIdx - 1 : (s.fromIdx === i ? null : s.fromIdx)) : null,
+    toIdx: s.toIdx != null ? (s.toIdx > i ? s.toIdx - 1 : s.toIdx) : null,
+  }));
+  // Clear buy/sell points and divergences (they reference turning point indices)
+  S.primary.buySellPoints = [];
+  S.primary.macd = null;
+  S.primary.divergencePoints = [];
+  document.getElementById('undoStrokeBtn').disabled = S.primary.turningPoints.length === 0;
   renderStrokeList();
-  drawChart();
+  drawChartAndSave();
 }
 
 function editStroke(i, el) {
-  const currentVal = S.strokes[i].val;
+  const currentVal = S.primary.strokes[i].val;
   const input = document.createElement('input');
   input.type = 'number';
   input.className = 'val-input';
@@ -580,8 +1007,8 @@ function editStroke(i, el) {
   function save() {
     const v = parseFloat(input.value);
     if (!isNaN(v)) {
-      S.strokes[i].val = Math.round(v * 100) / 100;
-      S.turningPoints[i] = Math.round(v * 100) / 100;
+      S.primary.strokes[i].val = Math.round(v * 100) / 100;
+      S.primary.turningPoints[i] = Math.round(v * 100) / 100;
     }
     renderStrokeList();
   }
@@ -590,21 +1017,22 @@ function editStroke(i, el) {
 }
 
 function clearAll() {
-  S.strokes = [];
-  S.turningPoints = [];
+  S.primary.strokes = [];
+  S.primary.turningPoints = [];
   S.deletedTurningPoints = new Set();
-  S.segments = [];
-  S.zhongshuList = [];
-  S.segmentZhongshu = [];
-  S.higherSegments = [];
-  S.buySellPoints = [];
-  S.divergencePoints = [];
+  S.primary.segments = [];
+  S.primary.zhongshuList = [];
+  S.primary.segmentZhongshu = [];
+  S.primary.higherSegments = [];
+  S.primary.buySellPoints = [];
+  S.primary.macd = null;
+  S.primary.divergencePoints = [];
   S.klineViewStart = 0;
   S.klineViewEnd = 0;
-  S.currentKlines = null;
+  S.primary.klines = null;
   S.currentSymbol = null;
-  S.currentInterval = null;
-  S.currentFractals = null;
+  S.primaryInterval = null;
+  S.primary.fractals = null;
   S.drawStart = null;
   S.zsDrawStart = null;
   S.segZsDrawStart = null;
@@ -643,15 +1071,25 @@ function clearAll() {
   renderHigherList();
   renderBsList();
   clearSVG();
+  clearSavedAnnotation();
+  // Reset signal panel and stop auto-refresh
+  stopAutoRefresh();
+  S.autoRefresh = false;
+  S.lastSignalState = null;
+  const autoBtn = document.getElementById('autoRefreshBtn');
+  if (autoBtn) { autoBtn.textContent = '自动刷新'; autoBtn.className = 'btn btn-warn'; autoBtn.style.flex = '1'; }
+  document.getElementById('pollStatus').textContent = '';
+  document.getElementById('signalContent').innerHTML =
+    '<div class="signal-direction neutral">--</div><div class="signal-state idle">无数据</div>';
 }
 
 function renderSegList() {
   const list = document.getElementById('segList');
   if (!list) return;
   list.innerHTML = '';
-  S.segments.forEach((seg, i) => {
-    const from = S.turningPoints[seg.fromIdx];
-    const to = S.turningPoints[seg.toIdx];
+  S.primary.segments.forEach((seg, i) => {
+    const from = S.primary.turningPoints[seg.fromIdx];
+    const to = S.primary.turningPoints[seg.toIdx];
     if (from === undefined || to === undefined) return;
     const isUp = to > from;
     const div = document.createElement('div');
@@ -669,11 +1107,11 @@ function renderZhongshuList() {
   const list = document.getElementById('zsList');
   if (!list) return;
   list.innerHTML = '';
-  S.zhongshuList.forEach((zs, i) => {
+  S.primary.zhongshuList.forEach((zs, i) => {
     const div = document.createElement('div');
     div.className = 'zs-item';
-    const from = S.turningPoints[zs.fromIdx];
-    const to = S.turningPoints[zs.toIdx];
+    const from = S.primary.turningPoints[zs.fromIdx];
+    const to = S.primary.turningPoints[zs.toIdx];
     div.innerHTML = `
       <span class="range">ZG=${Math.round(zs.zg * 100) / 100} ZD=${Math.round(zs.zd * 100) / 100} (${Math.round(from * 100) / 100}→${Math.round(to * 100) / 100})</span>
       <span class="del" onclick="removeZhongshu(${i})">×</span>
@@ -692,134 +1130,19 @@ function svgEl(tag, attrs) {
   return e;
 }
 
-// ====== MACD Computation ======
-function ema(data, period) {
-  const k = 2 / (period + 1);
-  const result = [data[0]];
-  for (let i = 1; i < data.length; i++) {
-    result.push(data[i] * k + result[i - 1] * (1 - k));
-  }
-  return result;
-}
-
-function computeMACD(closes, fast, slow, sig) {
-  fast = fast || 12; slow = slow || 26; sig = sig || 9;
-  const emaFast = ema(closes, fast);
-  const emaSlow = ema(closes, slow);
-  const dif = emaFast.map((v, i) => v - emaSlow[i]);
-  const dea = ema(dif, sig);
-  const histogram = dif.map((v, i) => (v - dea[i]) * 2);
-  return { dif, dea, histogram };
-}
-
-// ====== 缠论背驰检测 ======
-function detectDivergences() {
-  if (!S.currentKlines || !S.currentFractals || !S.buySellPoints.length) { S.divergencePoints = []; return; }
-
-  const closes = S.currentKlines.map(k => k.close);
-  const { dif, dea, histogram } = computeMACD(closes);
-  const tpKlineIdx = S.currentFractals.map(f => f.klineIdx);
-
-  // Collect peaks and valleys from turningPoints
-  const peaks = [], valleys = [];
-  for (let i = 1; i < S.turningPoints.length - 1; i++) {
-    if (S.turningPoints[i] > S.turningPoints[i - 1] && S.turningPoints[i] > S.turningPoints[i + 1]) peaks.push(i);
-    if (S.turningPoints[i] < S.turningPoints[i - 1] && S.turningPoints[i] < S.turningPoints[i + 1]) valleys.push(i);
-  }
-
-  // Sum histogram area between two kline indices (inclusive)
-  function histArea(klA, klB) {
-    const s = Math.min(klA, klB), e = Math.max(klA, klB);
-    let sum = 0;
-    for (let i = s; i <= e; i++) sum += histogram[i];
-    return sum;
-  }
-
-  function prevPeakBefore(idx) {
-    for (let i = peaks.length - 1; i >= 0; i--) if (peaks[i] < idx) return peaks[i];
-    return null;
-  }
-  function prevValleyBefore(idx) {
-    for (let i = valleys.length - 1; i >= 0; i--) if (valleys[i] < idx) return valleys[i];
-    return null;
-  }
-
-  const results = [];
-
-  S.buySellPoints.forEach(point => {
-    const i = point.idx;
-    if (tpKlineIdx[i] === undefined) return;
-
-    if (point.type === 'buy') {
-      // 底背驰: find previous valley j where price[j] > price[i] (current makes new low)
-      // and MACD histogram area of the down-section to i is smaller than to j
-      for (let vi = valleys.length - 1; vi >= 0; vi--) {
-        const j = valleys[vi];
-        if (j >= i) continue;
-        if (S.turningPoints[j] <= S.turningPoints[i]) continue; // need higher previous valley
-        if (tpKlineIdx[j] === undefined) continue;
-        // Compare histogram areas of the two down-sections
-        const peakBeforeI = prevPeakBefore(i);
-        const peakBeforeJ = prevPeakBefore(j);
-        const klStartI = peakBeforeI !== null ? tpKlineIdx[peakBeforeI] : 0;
-        const klStartJ = peakBeforeJ !== null ? tpKlineIdx[peakBeforeJ] : 0;
-        const areaI = Math.abs(histArea(klStartI, tpKlineIdx[i]));
-        const areaJ = Math.abs(histArea(klStartJ, tpKlineIdx[j]));
-        if (areaI < areaJ) {
-          results.push({
-            type: 'bottom', // 底背驰
-            idx: i,
-            compareIdx: j,
-            klineIdx: tpKlineIdx[i],
-            compareKlineIdx: tpKlineIdx[j]
-          });
-        }
-        break; // only check the most recent valid comparison valley
-      }
-    } else {
-      // 顶背驰: find previous peak j where price[j] < price[i] (current makes new high)
-      // and MACD histogram area of the up-section to i is smaller than to j
-      for (let pi = peaks.length - 1; pi >= 0; pi--) {
-        const j = peaks[pi];
-        if (j >= i) continue;
-        if (S.turningPoints[j] >= S.turningPoints[i]) continue; // need lower previous peak
-        if (tpKlineIdx[j] === undefined) continue;
-        const valleyBeforeI = prevValleyBefore(i);
-        const valleyBeforeJ = prevValleyBefore(j);
-        const klStartI = valleyBeforeI !== null ? tpKlineIdx[valleyBeforeI] : 0;
-        const klStartJ = valleyBeforeJ !== null ? tpKlineIdx[valleyBeforeJ] : 0;
-        const areaI = histArea(klStartI, tpKlineIdx[i]);
-        const areaJ = histArea(klStartJ, tpKlineIdx[j]);
-        if (areaI < areaJ) {
-          results.push({
-            type: 'top', // 顶背驰
-            idx: i,
-            compareIdx: j,
-            klineIdx: tpKlineIdx[i],
-            compareKlineIdx: tpKlineIdx[j]
-          });
-        }
-        break;
-      }
-    }
-  });
-
-  S.divergencePoints = results;
-}
-
 function clearSVG() {
   while (chart.firstChild) chart.removeChild(chart.firstChild);
   S.chartCoords = [];
 }
 
 function drawChart() {
-  if (S.turningPoints.length < 2) return;
+  if (S.primary.turningPoints.length < 2) return;
   clearSVG();
   const rect = chart.parentElement.getBoundingClientRect();
   const W = rect.width, H = rect.height;
   chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
-  const klineMode = !!S.currentKlines && S.currentKlines.length > 0;
+  const klineMode = !!S.primary.klines && S.primary.klines.length > 0;
   const left = 80, right = 60, top = 30;
 
   // Split into price area + MACD area
@@ -831,9 +1154,9 @@ function drawChart() {
 
   // === Price range ===
   let minP, maxP;
-  let visStart = 0, visEnd = 0, visibleKlines = S.currentKlines;
+  let visStart = 0, visEnd = 0, visibleKlines = S.primary.klines;
   if (klineMode) {
-    const totalKlines = S.currentKlines.length;
+    const totalKlines = S.primary.klines.length;
     if (S.klineViewEnd > S.klineViewStart) {
       visStart = Math.max(0, Math.floor(S.klineViewStart));
       visEnd = Math.min(totalKlines, Math.ceil(S.klineViewEnd));
@@ -841,17 +1164,17 @@ function drawChart() {
       visStart = 0;
       visEnd = totalKlines;
     }
-    visibleKlines = S.currentKlines.slice(visStart, visEnd);
+    visibleKlines = S.primary.klines.slice(visStart, visEnd);
     if (S.showKlines) {
-      minP = Math.min(...visibleKlines.map(k => k.low), ...S.turningPoints);
-      maxP = Math.max(...visibleKlines.map(k => k.high), ...S.turningPoints);
+      minP = Math.min(...visibleKlines.map(k => k.low), ...S.primary.turningPoints);
+      maxP = Math.max(...visibleKlines.map(k => k.high), ...S.primary.turningPoints);
     } else {
-      minP = Math.min(...S.turningPoints);
-      maxP = Math.max(...S.turningPoints);
+      minP = Math.min(...S.primary.turningPoints);
+      maxP = Math.max(...S.primary.turningPoints);
     }
   } else {
-    minP = Math.min(...S.turningPoints);
-    maxP = Math.max(...S.turningPoints);
+    minP = Math.min(...S.primary.turningPoints);
+    maxP = Math.max(...S.primary.turningPoints);
   }
   const padding = (maxP - minP) * 0.06 || 5;
   const rangeMin = minP - padding;
@@ -868,18 +1191,18 @@ function drawChart() {
     timeRange = timeMax - timeMin || 1;
     const timeToX = t => left + (t - timeMin) / timeRange * cW;
     // Build tpKlineIdx: map turning point index -> kline index
-    tpKlineIdx = S.currentFractals ? S.currentFractals.map(f => f.klineIdx) : [];
+    tpKlineIdx = S.primary.fractals ? S.primary.fractals.map(f => f.klineIdx) : [];
     toX = i => {
-      if (tpKlineIdx && i < tpKlineIdx.length && tpKlineIdx[i] < S.currentKlines.length) {
-        return timeToX(S.currentKlines[tpKlineIdx[i]].openTime);
+      if (tpKlineIdx && i < tpKlineIdx.length && tpKlineIdx[i] < S.primary.klines.length) {
+        return timeToX(S.primary.klines[tpKlineIdx[i]].openTime);
       }
-      return left + i * (cW / Math.max(S.turningPoints.length - 1, 1));
+      return left + i * (cW / Math.max(S.primary.turningPoints.length - 1, 1));
     };
     // Bar width from typical kline interval
-    const interval = S.currentKlines.length > 1 ? S.currentKlines[1].openTime - S.currentKlines[0].openTime : 60000;
+    const interval = S.primary.klines.length > 1 ? S.primary.klines[1].openTime - S.primary.klines[0].openTime : 60000;
     klineBarW = Math.max(1, (interval / timeRange) * cW * 0.8);
   } else {
-    const gap = cW / (S.turningPoints.length - 1);
+    const gap = cW / (S.primary.turningPoints.length - 1);
     toX = i => left + i * gap;
   }
 
@@ -891,9 +1214,9 @@ function drawChart() {
     minP: rangeMin, maxP: rangeMax, yScale,
     klineMode, W, H,
     timeMin, timeRange, klineBarW, tpKlineIdx,
-    visStart, visEnd, totalKlines: S.currentKlines ? S.currentKlines.length : 0
+    visStart, visEnd, totalKlines: S.primary.klines ? S.primary.klines.length : 0
   };
-  S.chartCoords = S.turningPoints.map((p, i) => ({ x: toX(i), y: toY(p), price: p }));
+  S.chartCoords = S.primary.turningPoints.map((p, i) => ({ x: toX(i), y: toY(p), price: p }));
 
   // === Price grid ===
   const dataRange = maxP - minP;
@@ -937,22 +1260,66 @@ function drawChart() {
     drawMACDPanel(macdTop, macdH, left, cW);
   }
 
+  // === Context period overlays ===
+  if (klineMode && S.showContext && S.context.interval && S.context.klines && S.context.klines.length > 0) {
+    const ctxTimeToX = t => left + (t - timeMin) / timeRange * cW;
+    // Build context tp index → klineIdx map from fractals
+    const ctxFractals = S.context.fractals;
+    const ctxTpTime = (idx) => {
+      if (ctxFractals && idx < ctxFractals.length) {
+        const kIdx = ctxFractals[idx].klineIdx;
+        if (kIdx < S.context.klines.length) return S.context.klines[kIdx].openTime;
+      }
+      return null;
+    };
+    // Render context zhongshu (behind context segments)
+    S.context.zhongshu.forEach(zs => {
+      const tFrom = ctxTpTime(zs.fromIdx);
+      const tTo = ctxTpTime(zs.toIdx);
+      if (tFrom === null || tTo === null) return;
+      const x1 = ctxTimeToX(tFrom), x2 = ctxTimeToX(tTo);
+      const zgY = toY(zs.zg), zdY = toY(zs.zd);
+      if (x1 > left + cW || x2 < left) return; // clip
+      chart.appendChild(svgEl("rect", {
+        x: x1 - 2, y: zgY, width: x2 - x1 + 4, height: zdY - zgY,
+        fill: "rgba(230,119,0,0.08)", stroke: "rgba(230,119,0,0.3)", "stroke-width": 2,
+        rx: 3, class: "ctx-zs-rect"
+      }));
+    });
+    // Render context segments
+    S.context.segments.forEach(seg => {
+      const tFrom = ctxTpTime(seg.fromIdx);
+      const tTo = ctxTpTime(seg.toIdx);
+      if (tFrom === null || tTo === null) return;
+      const x1 = ctxTimeToX(tFrom), x2 = ctxTimeToX(tTo);
+      if (x1 > left + cW || x2 < left) return; // clip
+      const pFrom = S.context.turningPoints[seg.fromIdx];
+      const pTo = S.context.turningPoints[seg.toIdx];
+      const isUp = pTo > pFrom;
+      chart.appendChild(svgEl("line", {
+        x1, y1: toY(pFrom), x2, y2: toY(pTo),
+        stroke: isUp ? "rgba(47,158,68,0.5)" : "rgba(201,42,42,0.5)",
+        "stroke-width": 4, "stroke-linecap": "round", class: "ctx-seg-line"
+      }));
+    });
+  }
+
   // === Overlays ===
   // 中枢 rectangles (behind segments)
   drawZhongshuRectangles();
   if (S.showSegZs) drawSegmentZhongshuRects();
 
   // Segments
-  S.segments.forEach((seg, i) => drawSegmentLine(seg.fromIdx, seg.toIdx, i));
+  S.primary.segments.forEach((seg, i) => drawSegmentLine(seg.fromIdx, seg.toIdx, i));
 
   // Zigzag strokes — draw only strokes that exist in the strokes array
-  if (S.strokes.length >= 1) {
+  if (S.primary.strokes.length >= 1) {
     const strokeColor = klineMode ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.85)";
     const strokeWidth = klineMode ? 1 : 0.8;
-    S.strokes.forEach((s, si) => {
+    S.primary.strokes.forEach((s, si) => {
       if (s.fromIdx === null || s.fromIdx === undefined) return;
-      const x1 = toX(s.fromIdx), y1 = toY(S.turningPoints[s.fromIdx]);
-      const x2 = toX(s.toIdx), y2 = toY(S.turningPoints[s.toIdx]);
+      const x1 = toX(s.fromIdx), y1 = toY(S.primary.turningPoints[s.fromIdx]);
+      const x2 = toX(s.toIdx), y2 = toY(S.primary.turningPoints[s.toIdx]);
       const hidden = S.deletedTurningPoints.has(s.fromIdx) || S.deletedTurningPoints.has(s.toIdx);
       if (!hidden) {
         chart.appendChild(svgEl("line", {
@@ -971,15 +1338,15 @@ function drawChart() {
     });
   }
   // Turning point dots — skip deleted
-  S.turningPoints.forEach((p, i) => {
+  S.primary.turningPoints.forEach((p, i) => {
     if (S.deletedTurningPoints.has(i)) return;
     const x = toX(i), y = toY(p);
 
     // Visual dots — always show
     if (klineMode) {
       // Kline mode: colored dots — green for bottom, red for top
-      const isTop = i > 0 && i < S.turningPoints.length - 1 && S.turningPoints[i] > S.turningPoints[i-1] && S.turningPoints[i] > S.turningPoints[i+1];
-      const isBottom = i > 0 && i < S.turningPoints.length - 1 && S.turningPoints[i] < S.turningPoints[i-1] && S.turningPoints[i] < S.turningPoints[i+1];
+      const isTop = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] > S.primary.turningPoints[i-1] && S.primary.turningPoints[i] > S.primary.turningPoints[i+1];
+      const isBottom = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] < S.primary.turningPoints[i-1] && S.primary.turningPoints[i] < S.primary.turningPoints[i+1];
       const dotColor = isTop ? "#ff6b6b" : isBottom ? "#51cf66" : "#00e5ff";
       chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 5, fill: dotColor, stroke: "#fff", "stroke-width": 1, class: "tp-dot", "data-idx": i, style: "cursor:pointer" }));
       // Price label
@@ -990,8 +1357,8 @@ function drawChart() {
     } else {
       chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 7, fill: "none", stroke: "rgba(255,255,255,0.2)", "stroke-width": 1, opacity: 0.25 }));
       chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 5, fill: "#16213e", stroke: "rgba(255,255,255,0.85)", "stroke-width": 1.5, class: "tp-dot", "data-idx": i, style: "cursor:grab" }));
-      const isPeak = i > 0 && i < S.turningPoints.length - 1 && S.turningPoints[i] > S.turningPoints[i-1] && S.turningPoints[i] > S.turningPoints[i+1];
-      const isValley = i > 0 && i < S.turningPoints.length - 1 && S.turningPoints[i] < S.turningPoints[i-1] && S.turningPoints[i] < S.turningPoints[i+1];
+      const isPeak = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] > S.primary.turningPoints[i-1] && S.primary.turningPoints[i] > S.primary.turningPoints[i+1];
+      const isValley = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] < S.primary.turningPoints[i-1] && S.primary.turningPoints[i] < S.primary.turningPoints[i+1];
       let ly = isPeak ? y - 14 : isValley ? y + 20 : (i === 0 ? y - 14 : y + 20);
       const lbl = svgEl("text", { x, y: ly, fill: "#99aabb", "font-size": 12, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace", class: "tp-label", "data-idx": i });
       lbl.textContent = Math.round(p * 100) / 100;
@@ -1022,7 +1389,7 @@ function drawChart() {
       const k = visibleKlines[vi];
       const x = timeToX(k.openTime);
       const dt = new Date(k.openTime);
-      const txt = S.currentInterval && (S.currentInterval.includes('d') || S.currentInterval === '1w' || S.currentInterval === '1M')
+      const txt = S.primaryInterval && (S.primaryInterval.includes('d') || S.primaryInterval === '1w' || S.primaryInterval === '1M')
         ? `${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getDate().toString().padStart(2,'0')}`
         : `${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
       const lbl = svgEl("text", { x, y: labelY, fill: "#5577aa", "font-size": 10, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace" });
@@ -1035,9 +1402,9 @@ function drawChart() {
 }
 
 function drawMACDPanel(macdTop, macdH, left, cW) {
-  // Compute MACD from ALL klines (for correct EMA), but only render visible slice
-  const allCloses = S.currentKlines.map(k => k.close);
-  const { dif, dea, histogram } = computeMACD(allCloses);
+  // Use backend-provided MACD data
+  if (!S.primary.macd) return;
+  const { dif, dea, histogram } = S.primary.macd;
 
   const visStart = S.chartLayout.visStart;
   const visEnd = S.chartLayout.visEnd;
@@ -1071,7 +1438,7 @@ function drawMACDPanel(macdTop, macdH, left, cW) {
   // Histogram bars (visible only)
   visHist.forEach((v, vi) => {
     const kIdx = visStart + vi;
-    const x = timeToX(S.currentKlines[kIdx].openTime);
+    const x = timeToX(S.primary.klines[kIdx].openTime);
     const y = toMY(v);
     const h = Math.abs(y - zeroY);
     const prevV = vi > 0 ? visHist[vi - 1] : v;
@@ -1086,7 +1453,7 @@ function drawMACDPanel(macdTop, macdH, left, cW) {
   let dDif = "";
   visDif.forEach((v, vi) => {
     const kIdx = visStart + vi;
-    const x = timeToX(S.currentKlines[kIdx].openTime);
+    const x = timeToX(S.primary.klines[kIdx].openTime);
     const y = toMY(v);
     dDif += (vi === 0 ? "M" : "L") + ` ${x} ${y}`;
   });
@@ -1096,23 +1463,23 @@ function drawMACDPanel(macdTop, macdH, left, cW) {
   let dDea = "";
   visDea.forEach((v, vi) => {
     const kIdx = visStart + vi;
-    const x = timeToX(S.currentKlines[kIdx].openTime);
+    const x = timeToX(S.primary.klines[kIdx].openTime);
     const y = toMY(v);
     dDea += (vi === 0 ? "M" : "L") + ` ${x} ${y}`;
   });
   if (dDea) chart.appendChild(svgEl("path", { d: dDea, fill: "none", stroke: "#ff9800", "stroke-width": 1.2 }));
 
   // Divergence lines on MACD
-  if (S.divergencePoints.length) {
-    S.divergencePoints.forEach(div => {
+  if (S.primary.divergencePoints.length) {
+    S.primary.divergencePoints.forEach(div => {
       const kIdx1 = div.compareKlineIdx;
       const kIdx2 = div.klineIdx;
       // Only draw if both points are in visible range
       if (kIdx1 < visStart || kIdx1 >= visEnd || kIdx2 < visStart || kIdx2 >= visEnd) return;
 
-      const x1 = timeToX(S.currentKlines[kIdx1].openTime);
+      const x1 = timeToX(S.primary.klines[kIdx1].openTime);
       const y1 = toMY(dif[kIdx1]);
-      const x2 = timeToX(S.currentKlines[kIdx2].openTime);
+      const x2 = timeToX(S.primary.klines[kIdx2].openTime);
       const y2 = toMY(dif[kIdx2]);
       const isTop = div.type === 'top';
       const color = isTop ? "#ff1744" : "#00c853";
@@ -1162,7 +1529,7 @@ function drawSegmentLine(fromIdx, toIdx, segIdx) {
 
 function redrawSegments() {
   chart.querySelectorAll(".seg-line,.seg-hit").forEach(el => el.remove());
-  S.segments.forEach((seg, i) => drawSegmentLine(seg.fromIdx, seg.toIdx, i));
+  S.primary.segments.forEach((seg, i) => drawSegmentLine(seg.fromIdx, seg.toIdx, i));
   bindSegHover();
 }
 
@@ -1187,7 +1554,7 @@ function bindSegHover() {
 
 function drawZhongshuRectangles() {
   if (!S.chartLayout || S.chartCoords.length === 0) return;
-  S.zhongshuList.forEach((zs, i) => {
+  S.primary.zhongshuList.forEach((zs, i) => {
     const from = S.chartCoords[zs.fromIdx];
     const to = S.chartCoords[zs.toIdx];
     if (!from || !to) return;
@@ -1207,7 +1574,7 @@ function drawZhongshuRectangles() {
 
 function drawSegmentZhongshuRects() {
   if (!S.chartLayout || S.chartCoords.length === 0) return;
-  S.segmentZhongshu.forEach((zs, i) => {
+  S.primary.segmentZhongshu.forEach((zs, i) => {
     const from = S.chartCoords[zs.fromIdx];
     const to = S.chartCoords[zs.toIdx];
     if (!from || !to) return;
@@ -1227,7 +1594,7 @@ function drawSegmentZhongshuRects() {
 
 function drawHigherSegmentLines() {
   if (!S.chartLayout || S.chartCoords.length === 0) return;
-  S.higherSegments.forEach((seg, i) => {
+  S.primary.higherSegments.forEach((seg, i) => {
     const from = S.chartCoords[seg.fromIdx];
     const to = S.chartCoords[seg.toIdx];
     if (!from || !to) return;
@@ -1348,43 +1715,43 @@ function toggleDrawHigher() {
 }
 
 function undoSegZs() {
-  if (S.segmentZhongshu.length === 0) return;
-  S.segmentZhongshu.pop();
-  drawChart();
+  if (S.primary.segmentZhongshu.length === 0) return;
+  S.primary.segmentZhongshu.pop();
+  drawChartAndSave();
   renderSegZsList();
-  document.getElementById('undoSegZsBtn').disabled = S.segmentZhongshu.length === 0;
+  document.getElementById('undoSegZsBtn').disabled = S.primary.segmentZhongshu.length === 0;
 }
 
 function removeSegZs(i) {
-  S.segmentZhongshu.splice(i, 1);
-  drawChart();
+  S.primary.segmentZhongshu.splice(i, 1);
+  drawChartAndSave();
   renderSegZsList();
-  document.getElementById('undoSegZsBtn').disabled = S.segmentZhongshu.length === 0;
+  document.getElementById('undoSegZsBtn').disabled = S.primary.segmentZhongshu.length === 0;
 }
 
 function undoHigher() {
-  if (S.higherSegments.length === 0) return;
-  S.higherSegments.pop();
-  drawChart();
+  if (S.primary.higherSegments.length === 0) return;
+  S.primary.higherSegments.pop();
+  drawChartAndSave();
   renderHigherList();
-  document.getElementById('undoHigherBtn').disabled = S.higherSegments.length === 0;
+  document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
 }
 
 function removeHigher(i) {
-  S.higherSegments.splice(i, 1);
-  drawChart();
+  S.primary.higherSegments.splice(i, 1);
+  drawChartAndSave();
   renderHigherList();
-  document.getElementById('undoHigherBtn').disabled = S.higherSegments.length === 0;
+  document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
 }
 
 function findSnapPoint(pt) {
-  if (!S.currentKlines || !S.chartLayout) return null;
+  if (!S.primary.klines || !S.chartLayout) return null;
   const timeToX = t => S.chartLayout.left + (t - S.chartLayout.timeMin) / S.chartLayout.timeRange * S.chartLayout.cW;
   const visStart = S.chartLayout.visStart || 0;
-  const visEnd = S.chartLayout.visEnd || S.currentKlines.length;
+  const visEnd = S.chartLayout.visEnd || S.primary.klines.length;
   let bestDist = Infinity, bestIdx = 0, useHigh = true;
   for (let ki = visStart; ki < visEnd; ki++) {
-    const k = S.currentKlines[ki];
+    const k = S.primary.klines[ki];
     const x = timeToX(k.openTime);
     const dx = Math.abs(pt.x - x);
     if (dx < bestDist) {
@@ -1396,7 +1763,7 @@ function findSnapPoint(pt) {
       useHigh = dyHigh < dyLow;
     }
   }
-  const k = S.currentKlines[bestIdx];
+  const k = S.primary.klines[bestIdx];
   const price = useHigh ? k.high : k.low;
   return { x: timeToX(k.openTime), y: S.chartLayout.priceBottom - (price - S.chartLayout.minP) * S.chartLayout.yScale, price, klineIdx: bestIdx, useHigh };
 }
@@ -1426,19 +1793,19 @@ function toggleDrawStroke() {
 }
 
 function undoStrokeDraw() {
-  if (S.turningPoints.length === 0) return;
-  S.strokes.pop();
-  S.turningPoints.pop();
-  if (S.currentFractals && S.currentFractals.length > S.turningPoints.length) {
-    S.currentFractals.pop();
+  if (S.primary.turningPoints.length === 0) return;
+  S.primary.strokes.pop();
+  S.primary.turningPoints.pop();
+  if (S.primary.fractals && S.primary.fractals.length > S.primary.turningPoints.length) {
+    S.primary.fractals.pop();
   }
-  S.segments = S.segments.filter(s => s.fromIdx < S.turningPoints.length && s.toIdx < S.turningPoints.length);
-  S.zhongshuList = S.zhongshuList.filter(z => z.fromIdx < S.turningPoints.length && z.toIdx < S.turningPoints.length);
-  S.segmentZhongshu = S.segmentZhongshu.filter(s => s.fromIdx < S.turningPoints.length && s.toIdx < S.turningPoints.length);
-  S.higherSegments = S.higherSegments.filter(s => s.fromIdx < S.turningPoints.length && s.toIdx < S.turningPoints.length);
-  document.getElementById('undoStrokeBtn').disabled = S.turningPoints.length === 0;
+  S.primary.segments = S.primary.segments.filter(s => s.fromIdx < S.primary.turningPoints.length && s.toIdx < S.primary.turningPoints.length);
+  S.primary.zhongshuList = S.primary.zhongshuList.filter(z => z.fromIdx < S.primary.turningPoints.length && z.toIdx < S.primary.turningPoints.length);
+  S.primary.segmentZhongshu = S.primary.segmentZhongshu.filter(s => s.fromIdx < S.primary.turningPoints.length && s.toIdx < S.primary.turningPoints.length);
+  S.primary.higherSegments = S.primary.higherSegments.filter(s => s.fromIdx < S.primary.turningPoints.length && s.toIdx < S.primary.turningPoints.length);
+  document.getElementById('undoStrokeBtn').disabled = S.primary.turningPoints.length === 0;
   renderStrokeList();
-  drawChart();
+  drawChartAndSave();
 }
 
 chart.addEventListener('click', function(e) {
@@ -1449,7 +1816,7 @@ chart.addEventListener('click', function(e) {
   const strokeHit = e.target.closest('.stroke-hit');
   if (strokeHit && noDrawMode) {
     const idx = parseInt(strokeHit.getAttribute('data-stroke-idx'));
-    if (!isNaN(idx) && idx > 0 && idx < S.turningPoints.length) {
+    if (!isNaN(idx) && idx > 0 && idx < S.primary.turningPoints.length) {
       S.deletedTurningPoints.add(idx - 1);
       S.deletedTurningPoints.add(idx);
       drawChart();
@@ -1461,7 +1828,7 @@ chart.addEventListener('click', function(e) {
   const tpHit = e.target.closest('.tp-dot, .tp-hit');
   if (tpHit && noDrawMode) {
     const idx = parseInt(tpHit.getAttribute('data-idx'));
-    if (!isNaN(idx) && idx < S.turningPoints.length) {
+    if (!isNaN(idx) && idx < S.primary.turningPoints.length) {
       removeStroke(idx);
     }
     return;
@@ -1470,10 +1837,10 @@ chart.addEventListener('click', function(e) {
   const segHit = e.target.closest('.seg-hit');
   if (segHit && noDrawMode) {
     const idx = parseInt(segHit.getAttribute('data-seg-idx'));
-    if (!isNaN(idx) && idx < S.segments.length) {
-      S.segments.splice(idx, 1);
+    if (!isNaN(idx) && idx < S.primary.segments.length) {
+      S.primary.segments.splice(idx, 1);
       redrawSegments();
-      document.getElementById('undoSegBtn').disabled = S.segments.length === 0;
+      document.getElementById('undoSegBtn').disabled = S.primary.segments.length === 0;
     }
     return;
   }
@@ -1481,10 +1848,10 @@ chart.addEventListener('click', function(e) {
   const zsRect = e.target.closest('.zs-rect');
   if (zsRect && noDrawMode) {
     const idx = parseInt(zsRect.getAttribute('data-zs-idx'));
-    if (!isNaN(idx) && idx < S.zhongshuList.length) {
-      S.zhongshuList.splice(idx, 1);
+    if (!isNaN(idx) && idx < S.primary.zhongshuList.length) {
+      S.primary.zhongshuList.splice(idx, 1);
       drawChart();
-      document.getElementById('undoZsBtn').disabled = S.zhongshuList.length === 0;
+      document.getElementById('undoZsBtn').disabled = S.primary.zhongshuList.length === 0;
     }
     return;
   }
@@ -1492,11 +1859,11 @@ chart.addEventListener('click', function(e) {
   const segZsRect = e.target.closest('.seg-zs-rect');
   if (segZsRect && noDrawMode) {
     const idx = parseInt(segZsRect.getAttribute('data-seg-zs-idx'));
-    if (!isNaN(idx) && idx < S.segmentZhongshu.length) {
-      S.segmentZhongshu.splice(idx, 1);
+    if (!isNaN(idx) && idx < S.primary.segmentZhongshu.length) {
+      S.primary.segmentZhongshu.splice(idx, 1);
       drawChart();
       renderSegZsList();
-      document.getElementById('undoSegZsBtn').disabled = S.segmentZhongshu.length === 0;
+      document.getElementById('undoSegZsBtn').disabled = S.primary.segmentZhongshu.length === 0;
     }
     return;
   }
@@ -1504,11 +1871,11 @@ chart.addEventListener('click', function(e) {
   const higherHit = e.target.closest('.higher-hit');
   if (higherHit && noDrawMode) {
     const idx = parseInt(higherHit.getAttribute('data-higher-idx'));
-    if (!isNaN(idx) && idx < S.higherSegments.length) {
-      S.higherSegments.splice(idx, 1);
+    if (!isNaN(idx) && idx < S.primary.higherSegments.length) {
+      S.primary.higherSegments.splice(idx, 1);
       drawChart();
       renderHigherList();
-      document.getElementById('undoHigherBtn').disabled = S.higherSegments.length === 0;
+      document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
     }
     return;
   }
@@ -1521,7 +1888,7 @@ chart.addEventListener('click', function(e) {
     if (pt.y < S.chartLayout.top || pt.y > S.chartLayout.priceBottom) return;
 
     let price, snapKlineIdx = null;
-    if (S.currentKlines) {
+    if (S.primary.klines) {
       const snap = findSnapPoint(pt);
       if (!snap) return;
       price = snap.price;
@@ -1535,19 +1902,19 @@ chart.addEventListener('click', function(e) {
     if (isManualFirst) {
       dir = 'down';
     } else {
-      const lastPrice = S.turningPoints[S.strokeDrawLastIdx];
+      const lastPrice = S.primary.turningPoints[S.strokeDrawLastIdx];
       dir = price > lastPrice ? 'up' : 'down';
     }
 
-    S.turningPoints.push(price);
-    if (S.currentKlines && snapKlineIdx !== null && snapKlineIdx < S.currentKlines.length) {
-      if (!S.currentFractals) S.currentFractals = [];
-      S.currentFractals.push({ klineIdx: snapKlineIdx, type: dir === 'up' ? 'top' : 'bottom', price, time: S.currentKlines[snapKlineIdx].openTime });
+    S.primary.turningPoints.push(price);
+    if (S.primary.klines && snapKlineIdx !== null && snapKlineIdx < S.primary.klines.length) {
+      if (!S.primary.fractals) S.primary.fractals = [];
+      S.primary.fractals.push({ klineIdx: snapKlineIdx, type: dir === 'up' ? 'top' : 'bottom', price, time: S.primary.klines[snapKlineIdx].openTime });
     }
     if (!isManualFirst) {
-      S.strokes.push({ dir, val: price, fromIdx: S.strokeDrawLastIdx, toIdx: S.turningPoints.length - 1 });
+      S.primary.strokes.push({ dir, val: price, fromIdx: S.strokeDrawLastIdx, toIdx: S.primary.turningPoints.length - 1 });
     }
-    S.strokeDrawLastIdx = S.turningPoints.length - 1;
+    S.strokeDrawLastIdx = S.primary.turningPoints.length - 1;
     document.getElementById('undoStrokeBtn').disabled = false;
     renderStrokeList();
     drawChart();
@@ -1566,7 +1933,7 @@ chart.addEventListener('click', function(e) {
       chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
     } else {
       if (idx === S.drawStart) return;
-      S.segments.push({ fromIdx: S.drawStart, toIdx: idx });
+      S.primary.segments.push({ fromIdx: S.drawStart, toIdx: idx });
       S.drawStart = null;
       chart.querySelectorAll('.tp-highlight').forEach(el => el.remove());
       redrawSegments();
@@ -1581,14 +1948,14 @@ chart.addEventListener('click', function(e) {
       if (idx === S.zsDrawStart) return;
       const fromIdx = Math.min(S.zsDrawStart, idx);
       const toIdx = Math.max(S.zsDrawStart, idx);
-      const tp = S.turningPoints;
+      const tp = S.primary.turningPoints;
       let minHigh = Infinity, maxLow = -Infinity;
       for (let i = fromIdx; i < toIdx; i++) {
         minHigh = Math.min(minHigh, Math.max(tp[i], tp[i+1]));
         maxLow = Math.max(maxLow, Math.min(tp[i], tp[i+1]));
       }
       if (minHigh > maxLow) {
-        S.zhongshuList.push({fromIdx, toIdx, zg: minHigh, zd: maxLow});
+        S.primary.zhongshuList.push({fromIdx, toIdx, zg: minHigh, zd: maxLow});
         document.getElementById('undoZsBtn').disabled = false;
       }
       S.zsDrawStart = null;
@@ -1604,17 +1971,17 @@ chart.addEventListener('click', function(e) {
       if (idx === S.segZsDrawStart) return;
       const fromIdx = Math.min(S.segZsDrawStart, idx);
       const toIdx = Math.max(S.segZsDrawStart, idx);
-      const inRangeSegs = S.segments.filter(s => s.fromIdx >= fromIdx && s.toIdx <= toIdx);
+      const inRangeSegs = S.primary.segments.filter(s => s.fromIdx >= fromIdx && s.toIdx <= toIdx);
       if (inRangeSegs.length >= 3) {
         let minHigh = Infinity, maxLow = -Infinity;
         for (const seg of inRangeSegs) {
-          const segHigh = Math.max(S.turningPoints[seg.fromIdx], S.turningPoints[seg.toIdx]);
-          const segLow = Math.min(S.turningPoints[seg.fromIdx], S.turningPoints[seg.toIdx]);
+          const segHigh = Math.max(S.primary.turningPoints[seg.fromIdx], S.primary.turningPoints[seg.toIdx]);
+          const segLow = Math.min(S.primary.turningPoints[seg.fromIdx], S.primary.turningPoints[seg.toIdx]);
           minHigh = Math.min(minHigh, segHigh);
           maxLow = Math.max(maxLow, segLow);
         }
         if (minHigh > maxLow) {
-          S.segmentZhongshu.push({
+          S.primary.segmentZhongshu.push({
             fromIdx: inRangeSegs[0].fromIdx,
             toIdx: inRangeSegs[inRangeSegs.length - 1].toIdx,
             zg: minHigh,
@@ -1635,7 +2002,7 @@ chart.addEventListener('click', function(e) {
       chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
     } else {
       if (idx === S.higherDrawStart) return;
-      S.higherSegments.push({ fromIdx: S.higherDrawStart, toIdx: idx });
+      S.primary.higherSegments.push({ fromIdx: S.higherDrawStart, toIdx: idx });
       S.higherDrawStart = null;
       chart.querySelectorAll('.tp-highlight').forEach(el => el.remove());
       drawChart();
@@ -1646,33 +2013,35 @@ chart.addEventListener('click', function(e) {
 });
 
 function undoSegment() {
-  if (S.segments.length === 0) return;
-  S.segments.pop();
+  if (S.primary.segments.length === 0) return;
+  S.primary.segments.pop();
   redrawSegments();
   renderSegList();
-  document.getElementById('undoSegBtn').disabled = S.segments.length === 0;
+  document.getElementById('undoSegBtn').disabled = S.primary.segments.length === 0;
+  autoSaveAnnotation();
 }
 
 function removeSegment(i) {
-  S.segments.splice(i, 1);
+  S.primary.segments.splice(i, 1);
   redrawSegments();
   renderSegList();
-  document.getElementById('undoSegBtn').disabled = S.segments.length === 0;
+  document.getElementById('undoSegBtn').disabled = S.primary.segments.length === 0;
+  autoSaveAnnotation();
 }
 
 function undoZhongshu() {
-  if (S.zhongshuList.length === 0) return;
-  S.zhongshuList.pop();
-  drawChart();
+  if (S.primary.zhongshuList.length === 0) return;
+  S.primary.zhongshuList.pop();
+  drawChartAndSave();
   renderZhongshuList();
-  document.getElementById('undoZsBtn').disabled = S.zhongshuList.length === 0;
+  document.getElementById('undoZsBtn').disabled = S.primary.zhongshuList.length === 0;
 }
 
 function removeZhongshu(i) {
-  S.zhongshuList.splice(i, 1);
-  drawChart();
+  S.primary.zhongshuList.splice(i, 1);
+  drawChartAndSave();
   renderZhongshuList();
-  document.getElementById('undoZsBtn').disabled = S.zhongshuList.length === 0;
+  document.getElementById('undoZsBtn').disabled = S.primary.zhongshuList.length === 0;
 }
 
 // ====== Drag ======
@@ -1692,7 +2061,7 @@ function yToPrice(y) {
 
 chart.addEventListener('mousedown', function(e) {
   const tpTarget = e.target.closest('.tp-hit, .tp-dot');
-  if (tpTarget && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && !S.currentKlines) {
+  if (tpTarget && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && !S.primary.klines) {
     const idx = parseInt(tpTarget.getAttribute('data-idx'));
     if (isNaN(idx)) return;
     S.isDragging = true;
@@ -1706,10 +2075,10 @@ chart.addEventListener('mousedown', function(e) {
   const zsRect = e.target.closest('.zs-rect');
   if (zsRect && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && S.chartLayout) {
     const zsIdx = parseInt(zsRect.getAttribute('data-zs-idx'));
-    if (!isNaN(zsIdx) && zsIdx < S.zhongshuList.length) {
+    if (!isNaN(zsIdx) && zsIdx < S.primary.zhongshuList.length) {
       const pt = svgPoint(e);
       if (pt) {
-        const zs = S.zhongshuList[zsIdx];
+        const zs = S.primary.zhongshuList[zsIdx];
         const zgY = S.chartLayout.priceBottom - (zs.zg - S.chartLayout.minP) * S.chartLayout.yScale;
         const zdY = S.chartLayout.priceBottom - (zs.zd - S.chartLayout.minP) * S.chartLayout.yScale;
         if (Math.abs(pt.y - zgY) < 15) {
@@ -1724,14 +2093,14 @@ chart.addEventListener('mousedown', function(e) {
   }
 
   // Pan: click-drag on empty space in kline mode
-  if (S.currentKlines && S.chartLayout && S.chartLayout.klineMode &&
+  if (S.primary.klines && S.chartLayout && S.chartLayout.klineMode &&
       !S.isDragging && !S.isDraggingZs && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && !S.drawStrokeMode) {
     const pt = svgPoint(e);
     if (pt && pt.x >= S.chartLayout.left && pt.x <= S.chartLayout.left + S.chartLayout.cW &&
         pt.y >= S.chartLayout.top && pt.y <= S.chartLayout.macdBottom) {
       S.isPanning = true;
       S.panStartX = e.clientX;
-      const totalKlines = S.currentKlines.length;
+      const totalKlines = S.primary.klines.length;
       if (S.klineViewEnd <= S.klineViewStart) {
         S.panViewStart = 0;
         S.panViewEnd = totalKlines;
@@ -1757,7 +2126,7 @@ document.addEventListener('mousemove', function(e) {
     const label = chart.querySelector(`[data-idx="${S.dragIdx}"].tp-label`);
     if (label) {
       label.textContent = Math.round(rawPrice * 100) / 100;
-      const prices = S.turningPoints, i = S.dragIdx;
+      const prices = S.primary.turningPoints, i = S.dragIdx;
       const isPeak = i > 0 && i < prices.length - 1 && prices[i] > prices[i-1] && prices[i] > prices[i+1];
       const isValley = i > 0 && i < prices.length - 1 && prices[i] < prices[i-1] && prices[i] < prices[i+1];
       const ly = isPeak ? clampedY - 14 : isValley ? clampedY + 20 : (i === 0 ? clampedY - 14 : clampedY + 20);
@@ -1773,7 +2142,7 @@ document.addEventListener('mousemove', function(e) {
     const yMin = S.chartLayout.top, yMax = S.chartLayout.priceBottom;
     const clampedY = Math.max(yMin, Math.min(yMax, pt.y));
     const price = Math.round(yToPrice(clampedY) * 100) / 100;
-    const zs = S.zhongshuList[S.zsDragIdx];
+    const zs = S.primary.zhongshuList[S.zsDragIdx];
     if (S.zsDragEdge === 'top') {
       zs.zg = Math.max(price, zs.zd + 0.01);
     } else {
@@ -1806,10 +2175,12 @@ document.addEventListener('mouseup', function(e) {
       const clampedY = Math.max(yMin, Math.min(yMax, pt.y));
       newPrice = Math.round(yToPrice(clampedY) * 100) / 100;
     } else {
-      newPrice = S.turningPoints[S.dragIdx];
+      newPrice = S.primary.turningPoints[S.dragIdx];
     }
-    S.turningPoints[S.dragIdx] = newPrice;
-    S.strokes[S.dragIdx].val = newPrice;
+    S.primary.turningPoints[S.dragIdx] = newPrice;
+    if (S.dragIdx < S.primary.strokes.length) {
+      S.primary.strokes[S.dragIdx].val = newPrice;
+    }
     S.isDragging = false;
     S.dragIdx = -1;
     renderStrokeList();
@@ -1835,9 +2206,9 @@ function updateZigzagPath(changedIdx, newY) {
   const path = chart.querySelector('path:not(.seg-line)');
   if (!path || !S.chartLayout) return;
 
-  const prices = S.turningPoints;
+  const prices = S.primary.turningPoints;
   const toY = p => S.chartLayout.priceBottom - (p - S.chartLayout.minP) * S.chartLayout.yScale;
-  const gap = S.chartLayout.cW / (S.turningPoints.length - 1);
+  const gap = S.chartLayout.cW / (S.primary.turningPoints.length - 1);
   const toX = i => S.chartLayout.left + i * gap;
 
   let d = `M ${toX(0)} ${changedIdx === 0 ? newY : toY(prices[0])}`;
@@ -1849,19 +2220,19 @@ function updateZigzagPath(changedIdx, newY) {
 }
 
 window.addEventListener('resize', () => {
-  if (S.turningPoints.length >= 2) drawChart();
+  if (S.primary.turningPoints.length >= 2) drawChart();
 });
 
 // ====== Zoom / Pan (K线模式) ======
 chart.addEventListener('wheel', function(e) {
-  if (!S.currentKlines || !S.chartLayout || !S.chartLayout.klineMode) return;
+  if (!S.primary.klines || !S.chartLayout || !S.chartLayout.klineMode) return;
   e.preventDefault();
   const pt = svgPoint(e);
   if (!pt) return;
   // Only zoom if cursor is inside chart area
   if (pt.x < S.chartLayout.left || pt.x > S.chartLayout.left + S.chartLayout.cW) return;
 
-  const totalKlines = S.currentKlines.length;
+  const totalKlines = S.primary.klines.length;
   if (S.klineViewEnd <= S.klineViewStart) {
     S.klineViewStart = 0;
     S.klineViewEnd = totalKlines;
@@ -1884,7 +2255,7 @@ chart.addEventListener('wheel', function(e) {
 }, { passive: false });
 
 chart.addEventListener('dblclick', function(e) {
-  if (!S.currentKlines) return;
+  if (!S.primary.klines) return;
   S.klineViewStart = 0;
   S.klineViewEnd = 0;
   drawChart();
@@ -1904,7 +2275,7 @@ function initCrosshair() {
 chart.addEventListener('mousemove', function(e) {
   if (!S.chartLayout) return;
   if (S.isDragging || S.isDraggingZs || S.isPanning || S.drawingMode || S.drawZsMode || S.drawSegZsMode || S.drawHigherMode) return;
-  if (!S.currentKlines && !S.drawStrokeMode) return;
+  if (!S.primary.klines && !S.drawStrokeMode) return;
 
   const pt = svgPoint(e);
   if (!pt) return;
@@ -1921,7 +2292,7 @@ chart.addEventListener('mousemove', function(e) {
   // In drawStrokeMode, show snap preview instead of full crosshair
   if (S.drawStrokeMode) {
     chart.querySelectorAll('.snap-preview').forEach(el => el.remove());
-    if (S.currentKlines) {
+    if (S.primary.klines) {
       const snap = findSnapPoint(pt);
       if (snap) {
         chart.appendChild(svgEl("circle", { cx: snap.x, cy: snap.y, r: 6, fill: snap.useHigh ? "rgba(255,80,80,0.6)" : "rgba(80,255,80,0.6)", stroke: "#fff", "stroke-width": 1.5, class: "snap-preview" }));
@@ -1973,13 +2344,13 @@ chart.addEventListener('mousemove', function(e) {
   }
 
   // Time label at bottom
-  if (klineMode && S.currentKlines) {
+  if (klineMode && S.primary.klines) {
     const timeMin = S.chartLayout.timeMin;
     const timeRange = S.chartLayout.timeRange;
     const t = timeMin + (pt.x - left) / cW * timeRange;
     // Find nearest kline
     const dt = new Date(t);
-    const txt = S.currentInterval && (S.currentInterval.includes('d') || S.currentInterval === '1w' || S.currentInterval === '1M')
+    const txt = S.primaryInterval && (S.primaryInterval.includes('d') || S.primaryInterval === '1w' || S.primaryInterval === '1M')
       ? `${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getDate().toString().padStart(2,'0')}`
       : `${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
     const xBg = chart.querySelector('.crosshair-x-bg');

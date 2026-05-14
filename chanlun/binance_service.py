@@ -230,3 +230,45 @@ def fractals_to_turning_points(fractals, min_kline_gap=4):
 
     turning_points = [f["price"] for f in result]
     return turning_points, result
+
+
+def fetch_klines_cached(symbol, interval, limit=500, start_time=None, end_time=None):
+    """带缓存的 K 线获取。
+
+    策略：
+    1. 查缓存获取已有数据范围
+    2. 只从 API 拉取缓存之后的部分
+    3. 合并缓存 + 新数据
+    4. 存储新拉取的历史 K 线（跳过最后一根未收盘）
+
+    保持 fetch_klines 不变，作为底层直接调用。
+    """
+    from chanlun.kline_cache import save_klines, get_cached_klines, get_latest_cached_time
+
+    if interval not in VALID_INTERVALS:
+        raise ValueError(f"Invalid interval. Must be one of: {', '.join(sorted(VALID_INTERVALS))}")
+
+    # 有 start_time/end_time 时无法简单利用缓存尾部，直接回退到 API
+    if start_time is not None or end_time is not None:
+        klines = fetch_klines(symbol, interval, limit, start_time, end_time)
+        save_klines(symbol, interval, klines)
+        return klines
+
+    # 查缓存
+    latest = get_latest_cached_time(symbol, interval)
+
+    if latest is not None:
+        # 只拉缓存之后的数据
+        new_klines = fetch_klines(symbol, interval, limit, start_time=latest + 1)
+        if new_klines:
+            save_klines(symbol, interval, new_klines)
+        # 读取缓存中最近 limit 根（通过限制查询数量）
+        cached = get_cached_klines(symbol, interval)
+        combined = cached + new_klines
+        # 返回最近 limit 根
+        return combined[-limit:] if len(combined) > limit else combined
+    else:
+        # 无缓存，直接 fetch
+        klines = fetch_klines(symbol, interval, limit)
+        save_klines(symbol, interval, klines)
+        return klines

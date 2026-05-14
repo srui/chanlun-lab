@@ -5,4 +5,5 @@ __pycache__/
 *.pyo
 venv/
 .env
+data/
 chanlun/test_segments.json

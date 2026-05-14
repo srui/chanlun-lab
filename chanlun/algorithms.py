@@ -40,14 +40,6 @@ def _find_pops(tp, peak_indices):
             if vals[i] > vals[i - 1] and vals[i] > vals[i + 1]]
 
 
-def _find_vovs(tp, valley_indices):
-    """谷之谷：在谷子序列中找局部极小值。"""
-    if len(valley_indices) < 3:
-        return valley_indices[:]
-    vals = [tp[i] for i in valley_indices]
-    return [valley_indices[i] for i in range(1, len(vals) - 1)
-            if vals[i] < vals[i - 1] and vals[i] < vals[i + 1]]
-
 
 def _find_valid_valley(tp, valley_indices, pop_a, pop_b):
     """在两个 PoP 之间找满足 MIN_STROKES 约束的最佳谷。
@@ -160,23 +152,6 @@ def _stroke_dir(tp, i):
     return "up" if tp[i + 1] > tp[i] else "down"
 
 
-def _strokes_overlap(tp, start, end):
-    """检测 tp[start..end] 范围内是否有连续3笔重叠。
-    start, end 是 tp 索引，笔从 start 到 end-1。
-    """
-    for i in range(start, end - 2):
-        r1_lo = min(tp[i], tp[i + 1])
-        r1_hi = max(tp[i], tp[i + 1])
-        r2_lo = min(tp[i + 1], tp[i + 2])
-        r2_hi = max(tp[i + 1], tp[i + 2])
-        r3_lo = min(tp[i + 2], tp[i + 3])
-        r3_hi = max(tp[i + 2], tp[i + 3])
-        overlap_hi = min(r1_hi, r2_hi, r3_hi)
-        overlap_lo = max(r1_lo, r2_lo, r3_lo)
-        if overlap_hi > overlap_lo:
-            return True
-    return False
-
 
 def _higher_high_higher_low(tp, start, end):
     """向上段趋势条件：所有谷值严格递增（更高的低点 = 支撑位上移）。
@@ -227,44 +202,13 @@ def compute_auto_segments(turning_points, min_segment_ratio=0.05):
         return []
 
     # 主算法：缠论规则线段检测
-    segments = _extremum_tracking(tp)
+    segments = _extremum_tracking_core(tp)
 
     # 主算法失败时 PoP 回退
     if not segments:
         segments = _pop_segment_fallback(tp, min_segment_ratio)
 
     return segments
-
-
-def _can_form_opposite_segment(tp, start, n, direction):
-    """检查从 start 开始能否形成 direction 方向的趋势段。
-    只用趋势条件（更高高点+更高低点 或 更低高点+更低低点）。
-    """
-    for end_idx in range(start + 3, n):
-        sc = end_idx - start
-        if sc % 2 == 0:
-            continue
-        if _stroke_dir(tp, end_idx - 1) != direction:
-            continue
-        if _is_segment_formed(tp, start, end_idx, direction):
-            return True
-    return False
-
-
-def _last_pair_ok(tp, start, end, direction):
-    """检查段的最后一对峰谷是否满足趋势条件。"""
-    if direction == "up":
-        peaks = [tp[j] for j in range(start + 1, end + 1, 2)]
-        valleys = [tp[j] for j in range(start, end + 1, 2)]
-    else:
-        peaks = [tp[j] for j in range(start, end + 1, 2)]
-        valleys = [tp[j] for j in range(start + 1, end + 1, 2)]
-    if len(peaks) < 2 or len(valleys) < 2:
-        return False
-    if direction == "up":
-        return peaks[-1] > peaks[-2] and valleys[-1] > valleys[-2]
-    else:
-        return peaks[-1] < peaks[-2] and valleys[-1] < valleys[-2]
 
 
 def _extremum_tracking_core(turning_points):
@@ -433,52 +377,6 @@ def _merge_same_direction(tp, segments):
     return merged
 
 
-def _extremum_tracking(turning_points):
-    """缠论线段检测算法。"""
-    return _extremum_tracking_core(turning_points)
-
-
-def _remove_degenerate_segments(tp, segments, min_range):
-    """移除价格幅度过小的退化段，修复链路保持交替方向。
-    策略：将退化段与前一方向相同的邻居合并（扩展前一段的终点），
-    而不是简单删除后让两边合并成超长段。
-    """
-    if not segments:
-        return segments
-
-    result = [segments[0].copy()]
-    for seg in segments[1:]:
-        rng = abs(tp[seg["toIdx"]] - tp[seg["fromIdx"]])
-        if rng < min_range:
-            # 退化段：扩展前一段的终点到当前段的终点
-            # 这相当于把退化段合并进前一段
-            result[-1]["toIdx"] = seg["toIdx"]
-        else:
-            result.append(seg.copy())
-
-    # 修复链路：确保每段 fromIdx == 前一段 toIdx
-    for i in range(1, len(result)):
-        if result[i]["fromIdx"] != result[i - 1]["toIdx"]:
-            result[i]["fromIdx"] = result[i - 1]["toIdx"]
-
-    # 合并相邻同方向段
-    changed = True
-    while changed:
-        changed = False
-        i = 0
-        while i < len(result) - 1:
-            d1 = "up" if tp[result[i]["toIdx"]] > tp[result[i]["fromIdx"]] else "down"
-            d2 = "up" if tp[result[i + 1]["toIdx"]] > tp[result[i + 1]["fromIdx"]] else "down"
-            if d1 == d2:
-                result[i] = {"fromIdx": result[i]["fromIdx"], "toIdx": result[i + 1]["toIdx"]}
-                del result[i + 1]
-                changed = True
-            else:
-                i += 1
-
-    return result
-
-
 def _pop_segment_fallback(turning_points, min_segment_ratio=0.05):
     """PoP 峰之峰回退算法 — 仅在主算法完全失败时使用。"""
     tp = turning_points
@@ -544,62 +442,133 @@ def _pop_segment_fallback(turning_points, min_segment_ratio=0.05):
     return segments
 
 
-def _detect_zhongshu_in_range(tp, start, end):
-    """在 tp[start..end] 范围内检测中枢。
-    缠论规则：至少三个连续笔有重叠部分。
+def _detect_zhongshu_in_units(units_high, units_low, start, end):
+    """在 units[start..end] 范围内检测中枢（通用版本）。
+
+    units_high[i]: 第 i 个单元的高点
+    units_low[i]:  第 i 个单元的低点
+    start, end: 单元索引范围
+
+    缠论规则：至少三个连续单元有重叠部分。
     ZG = 高点中的低点，ZD = 低点中的高点。
-    重叠笔可延伸，直到新笔与已有中枢不再重叠。
+    重叠单元可延伸，直到新单元与已有中枢不再重叠。
     """
-    if end - start < 3:
+    n = len(units_high)
+    if end - start < 2 or end >= n:
         return []
 
     raw = []
     i = start
-    while i <= end - 3:
-        r1_low = min(tp[i], tp[i + 1])
-        r1_high = max(tp[i], tp[i + 1])
-        r2_low = min(tp[i + 1], tp[i + 2])
-        r2_high = max(tp[i + 1], tp[i + 2])
-        r3_low = min(tp[i + 2], tp[i + 3])
-        r3_high = max(tp[i + 2], tp[i + 3])
+    while i <= end - 2:
+        h0, l0 = units_high[i], units_low[i]
+        h1, l1 = units_high[i + 1], units_low[i + 1]
+        h2, l2 = units_high[i + 2], units_low[i + 2]
 
-        zg = min(r1_high, r2_high, r3_high)
-        zd = max(r1_low, r2_low, r3_low)
+        zg = min(h0, h1, h2)
+        zd = max(l0, l1, l2)
 
         if zg > zd:
-            # 3笔重叠，中枢成立
-            from_idx = i
-            to_idx = i + 3
-            cur_zg = zg
-            cur_zd = zd
+            cur_zg, cur_zd = zg, zd
+            to_idx = i + 2
             ext = 0
 
-            # 延伸：后续笔如果与中枢重叠，则扩展中枢
-            for j in range(i + 3, end):
+            for j in range(i + 3, end + 1):
                 if ext >= ZS_MAX_EXTEND:
                     break
-                r_low = min(tp[j], tp[j + 1])
-                r_high = max(tp[j], tp[j + 1])
-                new_zg = min(cur_zg, r_high)
-                new_zd = max(cur_zd, r_low)
+                new_zg = min(cur_zg, units_high[j])
+                new_zd = max(cur_zd, units_low[j])
                 if new_zg <= new_zd:
                     break
-                to_idx = j + 1
-                cur_zg = new_zg
-                cur_zd = new_zd
+                to_idx = j
+                cur_zg, cur_zd = new_zg, new_zd
                 ext += 1
 
             raw.append({
-                "fromIdx": from_idx,
-                "toIdx": to_idx,
+                "first": i,
+                "last": to_idx,
                 "zg": cur_zg,
                 "zd": cur_zd,
             })
-            i = to_idx
+            i = to_idx + 1
         else:
             i += 1
 
     return raw
+
+
+def _trim_and_merge_zhongshu(zs_list, unit_dir, container_dir):
+    """对中枢列表做方向裁剪和重叠合并（通用版本）。
+
+    unit_dir(i): 第 i 个单元的方向 ("up" / "down")
+    container_dir: 容器方向 ("up" / "down")
+    """
+    for zs in zs_list:
+        fi, li = zs["first"], zs["last"]
+
+        # 检查第一个单元方向
+        if (container_dir == "up" and unit_dir(fi) == "up") or \
+           (container_dir == "down" and unit_dir(fi) == "down"):
+            fi += 1
+        # 检查最后一个单元方向
+        if (container_dir == "up" and unit_dir(li) == "up") or \
+           (container_dir == "down" and unit_dir(li) == "down"):
+            li -= 1
+
+        if li - fi >= 2:
+            zs["first"] = fi
+            zs["last"] = li
+        else:
+            zs["first"] = -1  # 标记无效
+
+    zs_list = [z for z in zs_list if z["first"] >= 0]
+
+    # 合并重叠
+    if len(zs_list) <= 1:
+        return zs_list
+
+    merged = [zs_list[0].copy()]
+    for zs in zs_list[1:]:
+        prev = merged[-1]
+        if zs["zd"] < prev["zg"] and zs["zg"] > prev["zd"]:
+            new_first = min(prev["first"], zs["first"])
+            new_last = max(prev["last"], zs["last"])
+            # 重新计算合并后的 ZG/ZD（由调用者负责，这里先合并范围）
+            merged[-1] = {
+                "first": new_first,
+                "last": new_last,
+                "zg": min(prev["zg"], zs["zg"]),
+                "zd": max(prev["zd"], zs["zd"]),
+            }
+        else:
+            merged.append(zs.copy())
+
+    return merged
+
+
+def _detect_zhongshu_in_range(tp, start, end):
+    """在 tp[start..end] 范围内检测笔中枢（兼容旧接口）。"""
+    if end - start < 3 or end >= len(tp):
+        return []
+
+    # 构建笔级别的高点/低点数组
+    units_high = []
+    units_low = []
+    for i in range(start, end + 1):
+        units_high.append(max(tp[i], tp[i + 1]) if i + 1 <= end else tp[i])
+        units_low.append(min(tp[i], tp[i + 1]) if i + 1 <= end else tp[i])
+
+    raw = _detect_zhongshu_in_units(units_high, units_low, 0, len(units_high) - 1)
+
+    # 转换回 tp 索引
+    result = []
+    for zs in raw:
+        result.append({
+            "fromIdx": start + zs["first"],
+            "toIdx": start + zs["last"] + 1,
+            "zg": zs["zg"],
+            "zd": zs["zd"],
+        })
+    return result
 
 
 def compute_auto_zhongshu(turning_points, segments=None, min_segment_ratio=0.05):
@@ -623,79 +592,44 @@ def compute_auto_zhongshu(turning_points, segments=None, min_segment_ratio=0.05)
         seg_start = seg["fromIdx"]
         seg_end = seg["toIdx"]
 
-        # 跳过首尾笔：中枢不包含段的第一笔和最后一笔
-        # UP段：DOWN开始DOWN结束 → fromIdx >= seg_start+1, toIdx <= seg_end-1
-        # DN段：UP开始UP结束 → 同上
         inner_start = seg_start + 1
         inner_end = seg_end - 1
 
         if inner_end - inner_start < 2:
-            # 内部笔不足3笔，无法形成中枢
             continue
 
-        # 段方向
         seg_dir = "up" if tp[seg_end] > tp[seg_start] else "down"
 
-        # 段内检测中枢
-        zs_list = _detect_zhongshu_in_range(tp, inner_start, inner_end)
+        # 构建笔级别的高点/低点数组
+        n_units = inner_end - inner_start
+        units_high = [max(tp[inner_start + i], tp[inner_start + i + 1]) for i in range(n_units)]
+        units_low = [min(tp[inner_start + i], tp[inner_start + i + 1]) for i in range(n_units)]
 
-        # 方向约束裁剪：UP段→首尾笔须为DN，DN段→首尾笔须为UP
+        zs_list = _detect_zhongshu_in_units(units_high, units_low, 0, n_units - 1)
+
+        # 方向函数：第 i 个笔单元的方向
+        def stroke_dir(i):
+            return "up" if tp[inner_start + i + 1] > tp[inner_start + i] else "down"
+
+        zs_list = _trim_and_merge_zhongshu(zs_list, stroke_dir, seg_dir)
+
+        # 转换回 tp 索引并重新计算裁剪后的 ZG/ZD
         for zs in zs_list:
-            # 检查第一笔方向
-            first_up = tp[zs["fromIdx"] + 1] > tp[zs["fromIdx"]]
-            if (seg_dir == "up" and first_up) or (seg_dir == "down" and not first_up):
-                zs["fromIdx"] += 1
-            # 检查最后一笔方向
-            last_up = tp[zs["toIdx"]] > tp[zs["toIdx"] - 1]
-            if (seg_dir == "up" and last_up) or (seg_dir == "down" and not last_up):
-                zs["toIdx"] -= 1
-            # 裁剪后重新计算 ZG/ZD
-            if zs["toIdx"] - zs["fromIdx"] >= 2:
-                min_high = float("inf")
-                max_low = float("-inf")
-                for k in range(zs["fromIdx"], zs["toIdx"]):
-                    min_high = min(min_high, max(tp[k], tp[k + 1]))
-                    max_low = max(max_low, min(tp[k], tp[k + 1]))
-                if min_high > max_low:
-                    zs["zg"] = min_high
-                    zs["zd"] = max_low
-                else:
-                    zs["fromIdx"] = -1  # 标记为无效
+            fi = inner_start + zs["first"]
+            ti = inner_start + zs["last"] + 1
+            min_high = min(max(tp[k], tp[k + 1]) for k in range(fi, ti))
+            max_low = max(min(tp[k], tp[k + 1]) for k in range(fi, ti))
+            if min_high > max_low:
+                zs["fromIdx"] = fi
+                zs["toIdx"] = ti
+                zs["zg"] = min_high
+                zs["zd"] = max_low
+                del zs["first"]
+                del zs["last"]
             else:
-                zs["fromIdx"] = -1  # 标记为无效
+                zs["fromIdx"] = -1
 
-        # 过滤无效的中枢
-        zs_list = [z for z in zs_list if z["fromIdx"] >= 0]
-
-        # 段内合并相邻/重叠的中枢
-        if len(zs_list) <= 1:
-            all_zhongshu.extend(zs_list)
-            continue
-
-        merged = [zs_list[0].copy()]
-        for zs in zs_list[1:]:
-            prev = merged[-1]
-            if zs["zd"] < prev["zg"] and zs["zg"] > prev["zd"]:
-                new_from = min(prev["fromIdx"], zs["fromIdx"])
-                new_to = max(prev["toIdx"], zs["toIdx"])
-                min_high = float("inf")
-                max_low = float("-inf")
-                for k in range(new_from, new_to):
-                    min_high = min(min_high, max(tp[k], tp[k + 1]))
-                    max_low = max(max_low, min(tp[k], tp[k + 1]))
-                if min_high > max_low:
-                    merged[-1] = {
-                        "fromIdx": new_from,
-                        "toIdx": new_to,
-                        "zg": min_high,
-                        "zd": max_low,
-                    }
-                else:
-                    merged.append(zs.copy())
-            else:
-                merged.append(zs.copy())
-
-        all_zhongshu.extend(merged)
+        all_zhongshu.extend(z for z in zs_list if z.get("fromIdx", -1) >= 0)
 
     return all_zhongshu
 
@@ -714,10 +648,9 @@ def compute_manual_zhongshu(turning_points, from_idx, to_idx):
 
 
 def compute_segment_zhongshu(turning_points, segments, higher_segments=None):
-    """段中枢：完全沿用 compute_auto_zhongshu 的递归逻辑。
-    对每个段的段（higher_segment）内部检测，排除首尾段，
-    方向裁剪（UP higher→首尾段须为DN，DN higher→首尾段须为UP），
-    紧密度检查、延伸限制和重叠合并。
+    """段中枢：对每个高级别段内部的段做中枢检测。
+    排除首尾段，方向裁剪，延伸限制和重叠合并。
+    使用通用的 _detect_zhongshu_in_units + _trim_and_merge_zhongshu。
     """
     tp = turning_points
     if len(segments) < 3:
@@ -729,13 +662,12 @@ def compute_segment_zhongshu(turning_points, segments, higher_segments=None):
     if not higher_segments:
         return []
 
-    def seg_high(si):
-        s = segments[si]
-        return max(tp[s["fromIdx"]], tp[s["toIdx"]])
+    # 构建段级别的高点/低点数组
+    seg_highs = [max(tp[s["fromIdx"]], tp[s["toIdx"]]) for s in segments]
+    seg_lows = [min(tp[s["fromIdx"]], tp[s["toIdx"]]) for s in segments]
 
-    def seg_low(si):
-        s = segments[si]
-        return min(tp[s["fromIdx"]], tp[s["toIdx"]])
+    def seg_unit_dir(si):
+        return "up" if tp[segments[si]["toIdx"]] > tp[segments[si]["fromIdx"]] else "down"
 
     all_zhongshu = []
 
@@ -756,145 +688,30 @@ def compute_segment_zhongshu(turning_points, segments, higher_segments=None):
         inner_start = seg_range[1]
         inner_end = seg_range[-2]
 
-        # higher_segment 方向
         hseg_dir = "up" if tp[h_end] > tp[h_start] else "down"
 
-        # 段内检测中枢
-        zs_list = _detect_seg_zhongshu_range(tp, segments, inner_start, inner_end)
+        zs_list = _detect_zhongshu_in_units(seg_highs, seg_lows, inner_start, inner_end)
+        zs_list = _trim_and_merge_zhongshu(zs_list, seg_unit_dir, hseg_dir)
 
-        # 方向约束裁剪：与笔中枢完全相同的逻辑
-        # UP higher→中枢首尾段须为DN，DN higher→中枢首尾段须为UP
+        # 转换为 tp 索引并重新计算 ZG/ZD
         for zs in zs_list:
-            fsi = zs["_fsi"]
-            lsi = zs["_lsi"]
-
-            # 检查第一段方向
-            first_up = tp[segments[fsi]["toIdx"]] > tp[segments[fsi]["fromIdx"]]
-            if (hseg_dir == "up" and first_up) or (hseg_dir == "down" and not first_up):
-                fsi += 1
-
-            # 检查最后一段方向
-            last_up = tp[segments[lsi]["toIdx"]] > tp[segments[lsi]["fromIdx"]]
-            if (hseg_dir == "up" and last_up) or (hseg_dir == "down" and not last_up):
-                lsi -= 1
-
-            # 裁剪后重新计算 ZG/ZD
-            if lsi - fsi >= 2:
-                min_h = float("inf")
-                max_l = float("-inf")
-                for si in range(fsi, lsi + 1):
-                    min_h = min(min_h, seg_high(si))
-                    max_l = max(max_l, seg_low(si))
-                if min_h > max_l:
-                    zs["fromIdx"] = segments[fsi]["fromIdx"]
-                    zs["toIdx"] = segments[lsi]["toIdx"]
-                    zs["zg"] = min_h
-                    zs["zd"] = max_l
-                else:
-                    zs["fromIdx"] = -1
+            fi_si = zs["first"]
+            li_si = zs["last"]
+            min_h = min(seg_highs[s] for s in range(fi_si, li_si + 1))
+            max_l = max(seg_lows[s] for s in range(fi_si, li_si + 1))
+            if min_h > max_l:
+                zs["fromIdx"] = segments[fi_si]["fromIdx"]
+                zs["toIdx"] = segments[li_si]["toIdx"]
+                zs["zg"] = min_h
+                zs["zd"] = max_l
+                del zs["first"]
+                del zs["last"]
             else:
                 zs["fromIdx"] = -1
 
-        # 过滤无效的中枢
-        zs_list = [z for z in zs_list if z["fromIdx"] >= 0]
-
-        # 段内合并相邻/重叠的中枢（与笔中枢完全相同）
-        if len(zs_list) <= 1:
-            all_zhongshu.extend(_clean_seg_zhongshu_list(zs_list))
-            continue
-
-        merged = [zs_list[0].copy()]
-        for zs in zs_list[1:]:
-            prev = merged[-1]
-            if zs["zd"] < prev["zg"] and zs["zg"] > prev["zd"]:
-                new_from = min(prev["fromIdx"], zs["fromIdx"])
-                new_to = max(prev["toIdx"], zs["toIdx"])
-                min_h = float("inf")
-                max_l = float("-inf")
-                for si in range(len(segments)):
-                    s = segments[si]
-                    if s["fromIdx"] >= new_from and s["toIdx"] <= new_to:
-                        min_h = min(min_h, seg_high(si))
-                        max_l = max(max_l, seg_low(si))
-                if min_h > max_l:
-                    merged[-1] = {
-                        "fromIdx": new_from,
-                        "toIdx": new_to,
-                        "zg": min_h,
-                        "zd": max_l,
-                    }
-                else:
-                    merged.append(zs.copy())
-            else:
-                merged.append(zs.copy())
-
-        all_zhongshu.extend(_clean_seg_zhongshu_list(merged))
+        all_zhongshu.extend(z for z in zs_list if z.get("fromIdx", -1) >= 0)
 
     return all_zhongshu
-
-
-def _detect_seg_zhongshu_range(tp, segments, si_start, si_end):
-    """在 segments[si_start..si_end] 范围内检测段中枢。
-    与笔中枢完全相同的规则：至少3个连续段有重叠，延伸到不重叠为止。
-    ZG = 高点中的低点，ZD = 低点中的高点。
-    """
-    if si_end - si_start < 2:
-        return []
-
-    def sh(si):
-        s = segments[si]
-        return max(tp[s["fromIdx"]], tp[s["toIdx"]])
-
-    def sl(si):
-        s = segments[si]
-        return min(tp[s["fromIdx"]], tp[s["toIdx"]])
-
-    raw = []
-    i = si_start
-    while i <= si_end - 2:
-        h0, l0 = sh(i), sl(i)
-        h1, l1 = sh(i + 1), sl(i + 1)
-        h2, l2 = sh(i + 2), sl(i + 2)
-
-        zg = min(h0, h1, h2)
-        zd = max(l0, l1, l2)
-
-        if zg > zd:
-            # 3段重叠，中枢成立
-            cur_zg, cur_zd = zg, zd
-            to_si = i + 2
-            ext = 0
-
-            for j in range(i + 3, si_end + 1):
-                if ext >= ZS_MAX_EXTEND:
-                    break
-                new_zg = min(cur_zg, sh(j))
-                new_zd = max(cur_zd, sl(j))
-                if new_zg <= new_zd:
-                    break
-                to_si = j
-                cur_zg, cur_zd = new_zg, new_zd
-                ext += 1
-
-            raw.append({
-                "fromIdx": segments[i]["fromIdx"],
-                "toIdx": segments[to_si]["toIdx"],
-                "zg": cur_zg, "zd": cur_zd,
-                "_fsi": i, "_lsi": to_si,
-            })
-            i = to_si + 1
-        else:
-            i += 1
-
-    return raw
-
-
-def _clean_seg_zhongshu_list(zs_list):
-    """Remove internal _fsi/_lsi keys from zhongshu list."""
-    for zs in zs_list:
-        zs.pop("_fsi", None)
-        zs.pop("_lsi", None)
-    return zs_list
 
 
 def compute_higher_segments(turning_points, segments, min_segment_ratio=0.05):
