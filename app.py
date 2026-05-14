@@ -14,7 +14,6 @@ from chanlun.algorithms import (
     compute_segment_zhongshu,
     compute_higher_segments,
     compute_buy_sell_points,
-    generate_random_zigzag,
     build_strokes,
     build_segment_details,
 )
@@ -32,22 +31,36 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/generate/random", methods=["POST"])
-def api_random():
-    """随机生成转折点"""
+@app.route("/api/compute/strokes", methods=["POST"])
+def api_strokes():
+    """从 K 线数据自动检测分型 → 笔（转折点）。支持传入已有 klines 或重新 fetch。"""
     data = request.get_json() or {}
-    count = data.get("count", 8)
-    price_min = data.get("min", 90)
-    price_max = data.get("max", 140)
 
-    if count < 3 or price_min >= price_max:
-        return jsonify({"error": "count >= 3 and min < max required"}), 400
+    # 优先使用传入的 klines
+    klines = data.get("klines")
+    if not klines:
+        symbol = data.get("symbol", "BTCUSDT").upper()
+        interval = data.get("interval", "4h")
+        limit = data.get("limit", 200)
+        try:
+            klines = fetch_klines(symbol, interval, limit, data.get("startTime"), data.get("endTime"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"获取 Binance 数据失败: {str(e)}"}), 502
 
-    turning_points = generate_random_zigzag(count, price_min, price_max)
+    if len(klines) < 3:
+        return jsonify({"error": "K线数据不足（至少需要3条）"}), 400
+
+    min_kline_gap = data.get("minKlineGap", 4)
+
+    fractals = detect_fractals_from_klines(klines)
+    turning_points, filtered_fractals = fractals_to_turning_points(fractals, min_kline_gap)
     strokes = build_strokes(turning_points)
 
     return jsonify({
-        "turningPoints": turning_points,
+        "fractals": filtered_fractals,
+        "turningPoints": [round(p, 2) for p in turning_points],
         "strokes": strokes,
     })
 
@@ -145,6 +158,7 @@ def api_compute_all():
     start_time = data.get("startTime")
     end_time = data.get("endTime")
     min_segment_ratio = data.get("minSegmentRatio", 0.05)
+    min_kline_gap = data.get("minKlineGap", 4)
 
     try:
         klines = fetch_klines(symbol, interval, limit, start_time, end_time)
@@ -157,7 +171,7 @@ def api_compute_all():
         return jsonify({"error": "K线数据不足（至少需要3条）"}), 400
 
     fractals = detect_fractals_from_klines(klines)
-    turning_points, filtered_fractals = fractals_to_turning_points(fractals)
+    turning_points, filtered_fractals = fractals_to_turning_points(fractals, min_kline_gap)
 
     if len(turning_points) < 4:
         # 分型太少，无法画段/中枢
@@ -215,8 +229,8 @@ def api_export():
     # Build user segments with details
     user_seg_details = []
     for seg in user_segments:
-        fi = seg.get("fromIdx", seg.get("fromIdx", 0))
-        ti = seg.get("toIdx", seg.get("toIdx", 0))
+        fi = seg.get("fromIdx", 0)
+        ti = seg.get("toIdx", 0)
         if fi < len(tp) and ti < len(tp):
             user_seg_details.append({
                 "from": tp[fi],

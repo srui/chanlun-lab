@@ -181,36 +181,35 @@ def _strokes_overlap(tp, start, end):
 
 
 def _higher_high_higher_low(tp, start, end):
-    """向上段：检查是否存在至少连续3笔中峰递增且谷递增。
-    向上段中：峰在奇数索引(start+1,start+3,...)，谷在偶数索引(start,start+2,...)。
+    """向上段趋势条件：所有谷值严格递增（更高的低点 = 支撑位上移）。
+    向上段中谷在偶数索引(start, start+2, ...)。
+    严格要求：不允许任何谷值下降。
     """
-    peaks = [tp[i] for i in range(start + 1, end + 1, 2)]
     valleys = [tp[i] for i in range(start, end, 2)]
-    n_pairs = min(len(peaks) - 1, len(valleys) - 1)
-    for i in range(n_pairs):
-        if peaks[i + 1] > peaks[i] and valleys[i + 1] > valleys[i]:
-            return True
-    return False
+    return all(valleys[i + 1] > valleys[i] for i in range(len(valleys) - 1))
 
 
 def _lower_high_lower_low(tp, start, end):
-    """向下段：检查是否存在至少连续3笔中峰递减且谷递减。
-    向下段中：峰在偶数索引(start,start+2,...)，谷在奇数索引(start+1,start+3,...)。
+    """向下段趋势条件：谷值整体下移，允许最多1对相邻谷小幅反弹。
+    向下段中谷在奇数索引(start+1, start+3, ...)。
+    3笔段（2个谷）必须严格递减；5笔以上允许1次例外。
     """
-    peaks = [tp[i] for i in range(start, end + 1, 2)]
     valleys = [tp[i] for i in range(start + 1, end + 1, 2)]
-    n_pairs = min(len(peaks) - 1, len(valleys) - 1)
-    for i in range(n_pairs):
-        if peaks[i + 1] < peaks[i] and valleys[i + 1] < valleys[i]:
-            return True
-    return False
+    n = len(valleys)
+    if n < 2:
+        return False
+    max_exceptions = 0 if n <= 2 else 1
+    exceptions = 0
+    for i in range(n - 1):
+        if valleys[i + 1] >= valleys[i]:
+            exceptions += 1
+    return exceptions <= max_exceptions
 
 
 def _is_segment_formed(tp, start, end, direction):
     """判断从 tp[start] 到 tp[end] 是否满足段的条件。
-    终极版本：只用趋势条件（重叠不作为段的判定依据）。
-    direction='up': 更高的高点+更高的低点（峰递增+谷递增）
-    direction='down': 更低的高点+更低的低点（峰递减+谷递减）
+    direction='up': 所有谷值递增（更高的低点 = 支撑位上移）
+    direction='down': 所有谷值递减（更低的低点 = 支撑位下移）
     """
     if end - start < 3:
         return False
@@ -273,8 +272,8 @@ def _last_pair_ok(tp, start, end, direction):
 def _extremum_tracking_core(turning_points):
     """缠论线段检测核心扫描。
     策略：
-    1. 起始点优化：跳过前面不确定的点，从第一个明显极值开始
-    2. 贪心扫描：选反向段最少笔数的端点闭合（避免延伸过远）
+    1. 尝试从 TP[0] 开始扫描，失败则从 TP[1] 开始
+    2. 贪心扫描：选反向段最少笔数的端点闭合，同分时选更极端的端点
     3. 后处理拆分：对超长段在段内用同样策略递归拆分
     """
     tp = turning_points
@@ -282,28 +281,22 @@ def _extremum_tracking_core(turning_points):
     if n < 4:
         return []
 
-    # === 起始点优化 ===
-    # 找第一个"明显"极值：它是前几个点中的最高点或最低点，
-    # 并且从该点开始能更快地形成交替段
-    best_start = 0
-    if n >= 6:
-        # 前几个点的范围
-        front = tp[:min(6, n)]
-        max_idx = front.index(max(front))
-        min_idx = front.index(min(front))
-        # 优先选极值点作为起始（跳过平淡的点）
-        if max_idx > 0 or min_idx > 0:
-            # 选更极端的那个
-            if max(tp[max_idx], abs(tp[min_idx])) > abs(tp[0]):
-                best_start = min(max_idx, min_idx) or max(max_idx, min_idx)
-            # 确保从 best_start 开始第一笔有合理方向
-            if best_start == 0:
-                best_start = 0  # 保持不变
-            elif best_start >= n - 3:
-                best_start = 0  # 太靠后了，回退
+    # 尝试从 TP[0] 开始，失败则从 TP[1] 开始
+    for start_offset in [0, 1]:
+        if start_offset >= n - 3:
+            continue
+        segments = _scan_segments(tp, start_offset)
+        if segments:
+            return segments
 
+    return []
+
+
+def _scan_segments(tp, start_offset):
+    """从指定起始位置贪心扫描段。"""
+    n = len(tp)
     segments = []
-    seg_start = best_start
+    seg_start = start_offset
     seg_dir = _stroke_dir(tp, seg_start)
 
     for _ in range(200):
@@ -338,6 +331,12 @@ def _extremum_tracking_core(turning_points):
                     if best_min_opp is None or sc < best_min_opp:
                         best_min_opp = sc
                         best_end = end_idx
+                    elif sc == best_min_opp:
+                        # 同分时选更极端的端点（上升选更高峰，下降选更低谷）
+                        if seg_dir == "up" and tp[end_idx] > tp[best_end]:
+                            best_end = end_idx
+                        elif seg_dir == "down" and tp[end_idx] < tp[best_end]:
+                            best_end = end_idx
                     break
 
         if best_end is None:
@@ -347,69 +346,19 @@ def _extremum_tracking_core(turning_points):
         seg_start = best_end
         seg_dir = opp_dir
 
-    # 补起始段
-    if best_start > 0 and segments:
-        # 在 best_start 之前补充段
-        _prepend_start_segments(tp, best_start, segments)
-
-    # 剩余部分
-    if seg_start < n - 1 and n - 1 - seg_start >= MIN_STROKES:
+    # 剩余部分：仅当主循环产生了段时才处理尾部
+    if segments and seg_start < n - 1 and n - 1 - seg_start >= MIN_STROKES:
         segments.append({"fromIdx": seg_start, "toIdx": n - 1})
+
+    # 主循环没产生任何段，返回空（让上层尝试下一个起始点）
+    if not segments:
+        return []
 
     # 拆分超长段
     segments = _split_long_segments_v3(tp, segments)
 
     return _merge_same_direction(tp, segments)
 
-
-def _prepend_start_segments(tp, start_idx, segments):
-    """在 best_start 之前补充段，从 index 0 贪心到 start_idx。"""
-    if start_idx <= 0:
-        return
-    n = len(tp)
-    initial = []
-    cur = 0
-    cur_dir = _stroke_dir(tp, 0)
-
-    for _ in range(20):
-        if cur >= start_idx:
-            break
-        valid = []
-        for ei in range(cur + 3, start_idx + 1):
-            sc = ei - cur
-            if sc % 2 == 0: continue
-            if _stroke_dir(tp, ei - 1) != cur_dir: continue
-            if _is_segment_formed(tp, cur, ei, cur_dir):
-                valid.append(ei)
-        if not valid:
-            # 无法继续，直接连到 start_idx
-            if start_idx - cur >= MIN_STROKES:
-                initial.append({"fromIdx": cur, "toIdx": start_idx})
-            elif initial:
-                initial[-1]["toIdx"] = start_idx
-            break
-
-        opp = "up" if cur_dir == "down" else "down"
-        best = None
-        best_mo = None
-        for ei in valid:
-            mo = None
-            for oe in range(ei + 3, n):
-                sc = oe - ei
-                if sc % 2 == 0: continue
-                if _stroke_dir(tp, oe - 1) != opp: continue
-                if _is_segment_formed(tp, ei, oe, opp):
-                    mo = sc; break
-            eff = mo if mo else 999
-            if best is None or eff < (best_mo if best_mo else 999):
-                best_mo = mo; best = ei
-        if best is None:
-            best = valid[-1]
-        initial.append({"fromIdx": cur, "toIdx": best})
-        cur = best
-        cur_dir = opp
-
-    segments[0:0] = initial
 
 
 def _split_long_segments_v3(tp, segments):
@@ -1014,7 +963,12 @@ def generate_random_zigzag(count, price_min, price_max):
 
 
 def build_strokes(turning_points):
-    """从转折点构建笔列表"""
+    """从转折点构建笔列表。
+
+    注意：前端将 strokes[i] 与 turningPoints[i] 一一对应（用于编辑/删除）。
+    这里保持 N 个条目的格式（每条记录代表以该转折点为终点的笔），
+    同时附加 from/to 信息供算法使用。
+    """
     if not turning_points:
         return []
     strokes = []
@@ -1023,7 +977,14 @@ def build_strokes(turning_points):
             d = "down" if (len(turning_points) > 1 and turning_points[1] < turning_points[0]) else "up"
         else:
             d = "up" if p > turning_points[i - 1] else "down"
-        strokes.append({"dir": d, "val": p})
+        strokes.append({
+            "dir": d,
+            "val": p,
+            "from": turning_points[i - 1] if i > 0 else None,
+            "to": p,
+            "fromIdx": i - 1 if i > 0 else None,
+            "toIdx": i,
+        })
     return strokes
 
 
