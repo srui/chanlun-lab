@@ -1,7 +1,5 @@
 """缠论核心算法 — 缠论规则线段检测 + PoP回退"""
 
-import random
-
 # ====== 中枢参数 ======
 ZS_MAX_EXTEND = 30  # 最大延伸笔数（安全上限，防止异常数据）
 
@@ -536,20 +534,7 @@ def _pop_segment_fallback(turning_points, min_segment_ratio=0.05):
     if any(s["toIdx"] - s["fromIdx"] < MIN_STROKES for s in segments):
         return []
 
-    # 合并同方向
-    changed = True
-    while changed:
-        changed = False
-        i = 0
-        while i < len(segments) - 1:
-            d1 = "up" if tp[segments[i]["toIdx"]] > tp[segments[i]["fromIdx"]] else "down"
-            d2 = "up" if tp[segments[i+1]["toIdx"]] > tp[segments[i+1]["fromIdx"]] else "down"
-            if d1 == d2:
-                segments[i] = {"fromIdx": segments[i]["fromIdx"], "toIdx": segments[i+1]["toIdx"]}
-                del segments[i+1]
-                changed = True
-            else:
-                i += 1
+    segments = _merge_same_direction(tp, segments)
 
     if min_segment_ratio > 0 and segments:
         data_range = max(tp) - min(tp)
@@ -933,35 +918,6 @@ def compute_higher_segments(turning_points, segments, min_segment_ratio=0.05):
             for s in higher]
 
 
-def generate_random_zigzag(count, price_min, price_max):
-    """随机生成转折点"""
-    if count < 3 or price_min >= price_max:
-        return []
-
-    points = []
-    price = price_min + random.random() * (price_max - price_min)
-    points.append(round(price))
-
-    going_down = random.random() > 0.5
-    for _ in range(1, count):
-        r = price_max - price_min
-        swing = r * 0.05 + random.random() * r * 0.2
-        if going_down:
-            price = price - swing
-            if price < price_min:
-                price = price_min + random.random() * r * 0.05
-        else:
-            price = price + swing
-            if price > price_max:
-                price = price_max - random.random() * r * 0.05
-        rounded = round(price)
-        if rounded != points[-1]:
-            points.append(rounded)
-        going_down = not going_down
-
-    return points
-
-
 def build_strokes(turning_points):
     """从转折点构建笔列表。
 
@@ -1010,44 +966,66 @@ def compute_buy_sell_points(turning_points, zhongshu_list):
     对每个笔中枢，检测其后的买卖点：
     - 1买: 价格向下离开中枢（低于ZD）的第一个谷
     - 1卖: 价格向上离开中枢（高于ZG）的第一个峰
-    - 2买: 1买后回调不破1买低点的第一个谷（更高低点）
-    - 2卖: 1卖后反弹不破1卖高点的第一个峰（更低高点）
-    - 3买: 1卖后回踩不低于ZG的第一个谷（突破后回踩确认）
-    - 3卖: 1买后反弹不高于ZD的第一个峰（跌破后反弹确认）
+    - 2买: 1买后回调不破1买低点的第一个谷（更高低点），且之后继续向上
+    - 2卖: 1卖后反弹不破1卖高点的第一个峰（更低高点），且之后继续向下
+    - 3买: 1卖后回踩不低于ZG的第一个谷，且之后继续向上
+    - 3卖: 1买后反弹不高于ZD的第一个峰，且之后继续向下
 
-    搜索范围限制在当前中枢到下一个中枢之间。
+    搜索范围：到数据末尾（不截断到下一个中枢）。
     """
     if not zhongshu_list or len(turning_points) < 3:
         return []
 
     n = len(turning_points)
-    peak_indices, valley_indices = _extract_local_extremes(turning_points)
-    peak_set = set(peak_indices)
+    tp = turning_points
+
+    # 转折点序列本身是交替的峰谷，直接按奇偶索引区分
+    if tp[0] > tp[1]:
+        peak_set = set(range(0, n, 2))
+    else:
+        peak_set = set(range(1, n, 2))
+
+    def is_peak(i):
+        return i in peak_set
+
+    def is_valley(i):
+        return i not in peak_set
+
+    def has_continuation(idx, direction):
+        """确认 idx 之后有继续朝着 direction 方向运动的笔。
+        direction='up': idx 之后有一个更高的峰
+        direction='down': idx 之后有一个更低的谷
+        """
+        if direction == "up":
+            # 如果 idx 是谷，看下一个峰是否更高
+            if is_valley(idx):
+                return idx + 1 < n and tp[idx + 1] > tp[idx]
+            # 如果 idx 是峰，看后面的谷+峰是否创新高
+            return idx + 2 < n and tp[idx + 2] > tp[idx]
+        else:
+            if is_peak(idx):
+                return idx + 1 < n and tp[idx + 1] < tp[idx]
+            return idx + 2 < n and tp[idx + 2] < tp[idx]
 
     results = []
-    zs_count = len(zhongshu_list)
 
     for zsi, zs in enumerate(zhongshu_list):
         zg = zs['zg']
         zd = zs['zd']
         start = zs['toIdx'] + 1
 
-        # 搜索范围：到下一个中枢的 fromIdx 或数据末尾
-        limit = n
-        if zsi + 1 < zs_count:
-            limit = zhongshu_list[zsi + 1]['fromIdx']
-
-        if start >= limit:
+        if start >= n:
             continue
 
         # 阶段1：确定离开方向
-        exit_up_idx = None   # 第一个峰 > ZG
-        exit_down_idx = None # 第一个谷 < ZD
+        # 找第一笔穿越 ZG 或 ZD 的笔（看笔的终点，即转折点）
+        exit_up_idx = None   # 第一个峰 > ZG（向上离开）
+        exit_down_idx = None # 第一个谷 < ZD（向下离开）
 
-        for i in range(start, limit):
-            if exit_up_idx is None and i in peak_set and turning_points[i] > zg:
+        for i in range(start, n):
+            if exit_up_idx is None and is_peak(i) and tp[i] > zg:
                 exit_up_idx = i
-            if exit_down_idx is None and i not in peak_set and turning_points[i] < zd:
+            if exit_down_idx is None and is_valley(i) and tp[i] < zd:
                 exit_down_idx = i
             if exit_up_idx is not None and exit_down_idx is not None:
                 break
@@ -1056,34 +1034,36 @@ def compute_buy_sell_points(turning_points, zhongshu_list):
             # 向上离开 → 1卖
             results.append({"idx": exit_up_idx, "type": "sell", "label": "1"})
 
-            # 3买：1卖后第一个谷 >= ZG
-            for i in range(exit_up_idx + 1, limit):
-                if i not in peak_set:
-                    if turning_points[i] >= zg:
+            # 3买：1卖后回踩到 ZG 附近但不破 ZG 的谷，且之后继续向上
+            for i in range(exit_up_idx + 1, n):
+                if is_valley(i) and tp[i] >= zg:
+                    if has_continuation(i, "up"):
                         results.append({"idx": i, "type": "buy", "label": "3"})
                     break  # 只看第一个谷
 
-            # 2卖：1卖后第一个峰 <= 1卖价格
-            for i in range(exit_up_idx + 1, limit):
-                if i in peak_set and turning_points[i] <= turning_points[exit_up_idx]:
-                    results.append({"idx": i, "type": "sell", "label": "2"})
+            # 2卖：1卖后第一个更低高点（峰 <= 1卖价格），且之后继续向下
+            for i in range(exit_up_idx + 1, n):
+                if is_peak(i) and tp[i] <= tp[exit_up_idx]:
+                    if has_continuation(i, "down"):
+                        results.append({"idx": i, "type": "sell", "label": "2"})
                     break
 
         elif exit_down_idx is not None and (exit_up_idx is None or exit_down_idx < exit_up_idx):
             # 向下离开 → 1买
             results.append({"idx": exit_down_idx, "type": "buy", "label": "1"})
 
-            # 3卖：1买后第一个峰 <= ZD
-            for i in range(exit_down_idx + 1, limit):
-                if i in peak_set:
-                    if turning_points[i] <= zd:
+            # 3卖：1买后反弹到 ZD 附近但不破 ZD 的峰，且之后继续向下
+            for i in range(exit_down_idx + 1, n):
+                if is_peak(i) and tp[i] <= zd:
+                    if has_continuation(i, "down"):
                         results.append({"idx": i, "type": "sell", "label": "3"})
                     break  # 只看第一个峰
 
-            # 2买：1买后第一个谷 >= 1买价格
-            for i in range(exit_down_idx + 1, limit):
-                if i not in peak_set and turning_points[i] >= turning_points[exit_down_idx]:
-                    results.append({"idx": i, "type": "buy", "label": "2"})
+            # 2买：1买后第一个更高低点（谷 >= 1买价格），且之后继续向上
+            for i in range(exit_down_idx + 1, n):
+                if is_valley(i) and tp[i] >= tp[exit_down_idx]:
+                    if has_continuation(i, "up"):
+                        results.append({"idx": i, "type": "buy", "label": "2"})
                     break
 
     results.sort(key=lambda x: x['idx'])

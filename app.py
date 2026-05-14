@@ -79,6 +79,31 @@ def api_segments():
     return jsonify({"segments": segments})
 
 
+@app.route("/api/compute/recompute", methods=["POST"])
+def api_recompute():
+    """一次性重算段、中枢、段中枢、高级段、买卖点"""
+    data = request.get_json() or {}
+    tp = data.get("turningPoints", [])
+    min_segment_ratio = data.get("minSegmentRatio", 0.05)
+
+    if len(tp) < 4:
+        return jsonify({"error": "至少需要4个转折点"}), 400
+
+    segments = compute_auto_segments(tp, min_segment_ratio)
+    zhongshu = compute_auto_zhongshu(tp, segments)
+    higher_segments = compute_higher_segments(tp, segments, min_segment_ratio)
+    seg_zhongshu = compute_segment_zhongshu(tp, segments, higher_segments)
+    buy_sell_points = compute_buy_sell_points(tp, zhongshu)
+
+    return jsonify({
+        "segments": segments,
+        "zhongshu": zhongshu,
+        "segmentZhongshu": seg_zhongshu,
+        "higherSegments": higher_segments,
+        "buySellPoints": buy_sell_points,
+    })
+
+
 @app.route("/api/compute/zhongshu", methods=["POST"])
 def api_zhongshu():
     """从转折点自动画中枢（段内检测）"""
@@ -89,7 +114,7 @@ def api_zhongshu():
     if len(tp) < 4:
         return jsonify({"error": "至少需要4个转折点"}), 400
 
-    segments = compute_auto_segments(tp, min_segment_ratio)
+    segments = data.get("segments") or compute_auto_segments(tp, min_segment_ratio)
     zhongshu = compute_auto_zhongshu(tp, segments)
     return jsonify({"zhongshu": zhongshu})
 
@@ -104,7 +129,7 @@ def api_segment_level():
     if len(tp) < 4:
         return jsonify({"error": "至少需要4个转折点"}), 400
 
-    segments = compute_auto_segments(tp, min_segment_ratio)
+    segments = data.get("segments") or compute_auto_segments(tp, min_segment_ratio)
     higher_segments = compute_higher_segments(tp, segments, min_segment_ratio)
     seg_zhongshu = compute_segment_zhongshu(tp, segments, higher_segments)
 
@@ -142,7 +167,7 @@ def api_buy_sell():
     if len(tp) < 4:
         return jsonify({"error": "至少需要4个转折点"}), 400
 
-    segments = compute_auto_segments(tp, min_segment_ratio)
+    segments = data.get("segments") or compute_auto_segments(tp, min_segment_ratio)
     zhongshu = compute_auto_zhongshu(tp, segments)
     buy_sell_points = compute_buy_sell_points(tp, zhongshu)
     return jsonify({"buySellPoints": buy_sell_points})
