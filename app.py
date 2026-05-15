@@ -32,41 +32,114 @@ from chanlun.annotation_store import save_annotation, load_annotation, clear_ann
 from chanlun.signal import compute_signal
 from chanlun.analysis_cache import get_cached_analysis, save_analysis, get_cache_status
 from chanlun.background_updater import start_updater, get_updater_status
+from chanlun.watchlist_store import get_watchlist as wl_get, add_symbol as wl_add, remove_symbol as wl_remove
 
 app = Flask(__name__)
 
 # 预热状态
-_prefetch_status = {"symbol": "BTCUSDT", "intervals": {}, "complete": False}
+_prefetch_status = {"symbols": {}, "complete": False}
+
+MARKET_TYPES = ["spot", "futures"]
 
 
-def _run_prefetch(symbol="BTCUSDT"):
-    """后台线程：并发拉取所有预配置周期的 60 天数据。"""
-    _prefetch_status["symbol"] = symbol
-    _prefetch_status["complete"] = False
+def prefetch_symbol(symbol):
+    """后台线程：拉取 60 天 × 所有周期 × 现货+合约 的 K 线数据，然后跑分析缓存。"""
+    sym_status = {}
     for iv in PREFETCH_INTERVALS:
-        _prefetch_status["intervals"][iv] = "pending"
+        sym_status[iv] = "pending"
+    _prefetch_status["symbols"][symbol] = sym_status
 
-    def _fetch_one(iv):
+    def _fetch_one(iv, mt):
+        key = f"{iv}:{mt}"
+        sym_status[key] = "pending"
         try:
-            _, ok = fetch_klines_range(symbol, iv, days=PREFETCH_DAYS)
-            _prefetch_status["intervals"][iv] = "done" if ok else "failed"
+            klines, ok = fetch_klines_range(symbol, iv, days=PREFETCH_DAYS, market_type=mt)
+            sym_status[key] = "done" if ok else "failed"
+            return (iv, mt, klines if ok else [])
         except Exception as e:
-            print(f"[prefetch] {symbol} {iv} 异常: {e}")
-            _prefetch_status["intervals"][iv] = "failed"
+            print(f"[prefetch] {symbol} {iv} {mt} 异常: {e}")
+            sym_status[key] = "failed"
+            return (iv, mt, [])
 
+    # 并发拉取所有 周期×市场 组合
+    tasks = [(iv, mt) for iv in PREFETCH_INTERVALS for mt in MARKET_TYPES]
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(_fetch_one, iv): iv for iv in PREFETCH_INTERVALS}
-        for f in as_completed(futures):
-            f.result()
+        futures = [pool.submit(_fetch_one, iv, mt) for iv, mt in tasks]
+        results = [f.result() for f in as_completed(futures)]
 
-    _prefetch_status["complete"] = True
-    print(f"[prefetch] 全部完成: {_prefetch_status['intervals']}")
+    # 拉完后用已有 klines 跑分析管线并缓存（不重复拉取）
+    for iv, mt, klines in results:
+        if len(klines) >= 3:
+            try:
+                primary = analyze_klines(klines)
+                primary["symbol"] = symbol
+                primary["interval"] = iv
+                primary["klines"] = klines
+
+                context_interval = get_context_interval(iv)
+                context = None
+                if context_interval:
+                    ctx_limit = 75
+                    try:
+                        ctx_klines = fetch_klines_cached(symbol, context_interval, ctx_limit, market_type=mt)
+                    except Exception:
+                        ctx_klines = []
+                    if len(ctx_klines) >= 3:
+                        context = analyze_klines(ctx_klines)
+                        context["symbol"] = symbol
+                        context["interval"] = context_interval
+                        context["klines"] = ctx_klines
+
+                signal = compute_signal(primary, context)
+                save_analysis(symbol, iv, {"primary": primary, "context": context, "signal": signal}, market_type=mt)
+            except Exception as e:
+                print(f"[prefetch] {symbol} {iv} {mt} 分析失败: {e}")
+
+    print(f"[prefetch] {symbol} 完成")
 
 
 @app.route("/api/prefetch/status", methods=["GET"])
 def api_prefetch_status():
     """返回预热进度。"""
     return jsonify(_prefetch_status)
+
+
+@app.route("/api/watchlist", methods=["GET"])
+def api_watchlist_get():
+    """返回当前自选币种列表。"""
+    return jsonify({"symbols": wl_get()})
+
+
+@app.route("/api/watchlist/add", methods=["POST"])
+def api_watchlist_add():
+    """添加币种到自选，并异步拉取 60 天全量数据。"""
+    data = request.get_json() or {}
+    symbol = data.get("symbol", "").upper().strip()
+    if not symbol:
+        return jsonify({"error": "symbol 不能为空"}), 400
+
+    added = wl_add(symbol)
+    if not added:
+        return jsonify({"ok": True, "message": "币种已存在", "symbols": wl_get()})
+
+    # 异步拉取全量数据
+    t = threading.Thread(target=prefetch_symbol, args=(symbol,), daemon=True)
+    t.start()
+    print(f"[watchlist] 新增 {symbol}，后台拉取已启动")
+
+    return jsonify({"ok": True, "message": "已添加，正在后台拉取数据", "symbols": wl_get()})
+
+
+@app.route("/api/watchlist/remove", methods=["POST"])
+def api_watchlist_remove():
+    """从自选移除币种。"""
+    data = request.get_json() or {}
+    symbol = data.get("symbol", "").upper().strip()
+    if not symbol:
+        return jsonify({"error": "symbol 不能为空"}), 400
+
+    removed = wl_remove(symbol)
+    return jsonify({"ok": removed, "symbols": wl_get()})
 
 
 @app.route("/")
@@ -492,6 +565,7 @@ def api_signal():
 
         if len(ctx_klines) >= 3:
             context = analyze_klines(ctx_klines, min_kline_gap, min_segment_ratio)
+            context["symbol"] = symbol
             context["interval"] = context_interval
 
     signal = compute_signal(primary, context)
@@ -554,11 +628,9 @@ def api_cache_status():
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=_run_prefetch, kwargs={"symbol": "BTCUSDT"}, daemon=True)
-    t.start()
-    print("[prefetch] 后台预热已启动，拉取 60 天数据...")
-
-    start_updater()
-    print("[updater] 后台分析缓存更新已启动...")
+    import os as _os
+    if _os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
+        start_updater()
+        print("[updater] 后台分析缓存更新已启动（仅更新自选币种）...")
 
     app.run(debug=True, port=5000)

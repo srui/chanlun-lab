@@ -280,18 +280,23 @@ body {
 </div>
 
 <script>
-const DEFAULT_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','LINKUSDT'];
-
 let currentMarketType = localStorage.getItem('chanlun_market_type') || 'spot';
-function getSymbolList() {
+
+async function fetchSymbolList() {
   try {
-    const saved = JSON.parse(localStorage.getItem('chanlun_watchlist'));
-    if (Array.isArray(saved) && saved.length > 0) return saved;
+    const res = await fetch('/api/watchlist');
+    const data = await res.json();
+    if (Array.isArray(data.symbols)) return data.symbols;
   } catch(e) {}
-  return DEFAULT_SYMBOLS;
+  return [];
 }
-const SYMBOLS = getSymbolList();
-document.querySelector('.stat-pill .num').textContent = SYMBOLS.length;
+
+let SYMBOLS = [];
+fetchSymbolList().then(list => {
+  SYMBOLS = list;
+  document.querySelector('.stat-pill .num').textContent = SYMBOLS.length;
+  loadStats();
+});
 
 async function loadStats() {
   let buyCount = 0, sellCount = 0, divCount = 0;
@@ -330,8 +335,6 @@ document.querySelectorAll('.market-toggle button').forEach(btn => {
     loadStats();
   });
 });
-
-loadStats();
 </script>
 </body>
 </html>

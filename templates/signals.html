@@ -251,17 +251,19 @@ body {
 <div class="signal-list" id="signalList"></div>
 
 <script>
-const DEFAULT_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','LINKUSDT'];
-
 let currentMarketType = localStorage.getItem('chanlun_market_type') || 'spot';
-function getSymbolList() {
+
+async function fetchSymbolList() {
   try {
-    const saved = JSON.parse(localStorage.getItem('chanlun_watchlist'));
-    if (Array.isArray(saved) && saved.length > 0) return saved;
+    const res = await fetch('/api/watchlist');
+    const data = await res.json();
+    if (Array.isArray(data.symbols)) return data.symbols;
   } catch(e) {}
-  return DEFAULT_SYMBOLS;
+  return [];
 }
-const SYMBOLS = getSymbolList();
+
+let SYMBOLS = [];
+fetchSymbolList().then(list => { SYMBOLS = list; fetchSignals(); });
 
 const LABEL_MAP = {
   buy1: '一买', buy2: '二买', buy3: '三买',
@@ -456,8 +458,6 @@ document.querySelectorAll('.market-toggle button').forEach(btn => {
     fetchSignals();
   });
 });
-
-fetchSignals();
 
 document.querySelectorAll('.filter-pill').forEach(pill => {
   pill.addEventListener('click', () => {

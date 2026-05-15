@@ -362,24 +362,18 @@ td {
 
 <script>
 // ── Watchlist persistence ──
-const WL_KEY = 'chanlun_watchlist';
-const DEFAULT_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','LINKUSDT'];
-
 let currentMarketType = localStorage.getItem('chanlun_market_type') || 'spot';
 
-function getWatchlist() {
+async function fetchSymbolList() {
   try {
-    const saved = JSON.parse(localStorage.getItem(WL_KEY));
-    if (Array.isArray(saved) && saved.length > 0) return saved;
+    const res = await fetch('/api/watchlist');
+    const data = await res.json();
+    if (Array.isArray(data.symbols)) return data.symbols;
   } catch(e) {}
-  return [...DEFAULT_SYMBOLS];
+  return [];
 }
 
-function saveWatchlist(list) {
-  localStorage.setItem(WL_KEY, JSON.stringify(list));
-}
-
-let SYMBOLS = getWatchlist();
+let SYMBOLS = [];
 
 const tbody = document.getElementById('watchlistBody');
 
@@ -675,14 +669,22 @@ function normalizeSymbol(input) {
   return sym;
 }
 
-function addSymbol() {
+async function addSymbol() {
   const input = document.getElementById('searchInput');
   const sym = normalizeSymbol(input.value);
   if (!sym) { showToast('请输入有效的币种名称', 'warn'); return; }
   if (SYMBOLS.includes(sym)) { showToast(sym + ' 已在自选列表中', 'warn'); return; }
 
+  // Call backend to add + trigger prefetch
+  const res = await fetch('/api/watchlist/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol: sym })
+  });
+  const data = await res.json();
+  if (!data.ok) { showToast(data.error || '添加失败', 'error'); return; }
+
   SYMBOLS.push(sym);
-  saveWatchlist(SYMBOLS);
   input.value = '';
 
   // Append a single row instead of full reload
@@ -739,12 +741,16 @@ function addSymbol() {
     if (closes) { const canvas = tr.querySelector('.sparkline canvas'); if (canvas) drawSparkline(canvas, closes); }
   })();
 
-  showToast(sym + ' 已添加', 'success');
+  showToast(sym + ' 已添加，后台正在拉取 60 天数据', 'success');
 }
 
-function removeSymbol(sym) {
+async function removeSymbol(sym) {
+  await fetch('/api/watchlist/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol: sym })
+  });
   SYMBOLS = SYMBOLS.filter(s => s !== sym);
-  saveWatchlist(SYMBOLS);
   const entry = rowData.get(sym);
   if (entry && entry.tr) entry.tr.remove();
   rowData.delete(sym);
@@ -772,7 +778,7 @@ document.querySelectorAll('.market-toggle button').forEach(btn => {
   });
 });
 
-loadAll();
+fetchSymbolList().then(list => { SYMBOLS = list; loadAll(); });
 </script>
 </body>
 </html>

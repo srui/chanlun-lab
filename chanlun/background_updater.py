@@ -5,7 +5,8 @@ import threading
 from chanlun.binance_service import fetch_klines_cached
 from chanlun.pipeline import analyze_klines
 from chanlun.signal import compute_signal
-from chanlun.config import get_poll_interval, get_context_interval, DEFAULT_SYMBOLS, CACHE_INTERVALS
+from chanlun.config import get_poll_interval, get_context_interval, CACHE_INTERVALS
+from chanlun.watchlist_store import get_watchlist
 from chanlun.analysis_cache import save_analysis
 
 MARKET_TYPES = ["spot", "futures"]
@@ -53,25 +54,24 @@ def _update_one(symbol, interval, market_type="spot", limit=300):
     return cache_entry
 
 
-def _updater_loop(symbols=None, intervals=None):
-    if symbols is None:
-        symbols = DEFAULT_SYMBOLS
+def _updater_loop(intervals=None):
     if intervals is None:
         intervals = CACHE_INTERVALS
 
     _updater_status["running"] = True
-    _updater_status["symbols"] = symbols
     _updater_status["intervals"] = intervals
 
     last_update = {}
     min_sleep = 10
-    total = len(symbols) * len(intervals) * len(MARKET_TYPES)
 
-    print(f"[updater] 启动 — {len(symbols)} 币种 × {len(intervals)} 周期 × {len(MARKET_TYPES)} 市场 = {total} 个缓存对")
+    print(f"[updater] 启动 — 动态币种 × {len(intervals)} 周期 × {len(MARKET_TYPES)} 市场")
 
     while True:
         now = time.time()
         _updater_status["lastRun"] = now
+
+        symbols = get_watchlist()
+        _updater_status["symbols"] = symbols
 
         for symbol in symbols:
             for interval in intervals:
@@ -103,9 +103,9 @@ def _updater_loop(symbols=None, intervals=None):
         time.sleep(max(min_sleep, shortest_ttl // 2))
 
 
-def start_updater(symbols=None, intervals=None):
+def start_updater(intervals=None):
     """启动后台更新线程（daemon），立即返回。"""
-    t = threading.Thread(target=_updater_loop, args=(symbols, intervals), daemon=True)
+    t = threading.Thread(target=_updater_loop, args=(intervals,), daemon=True)
     t.start()
     return t
 
