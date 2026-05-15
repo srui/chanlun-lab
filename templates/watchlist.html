@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缠论K线 — 自选列表</title>
+<style>
+:root {
+  --bg: #F7F8FA;
+  --surface: #FFFFFF;
+  --fg: #111111;
+  --muted: #6B6B6B;
+  --border: #E5E5E5;
+  --accent: #2F6FEB;
+  --success: #17A34A;
+  --danger: #DC2626;
+  --warn: #EAB308;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--fg);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Top Nav ── */
+.top-nav {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.nav-logo { font-weight: 700; font-size: 15px; color: var(--fg); margin-right: 8px; white-space: nowrap; letter-spacing: -0.02em; }
+.nav-logo span { color: var(--accent); }
+
+.nav-links { display: flex; gap: 2px; }
+.nav-links a { text-decoration: none; color: var(--muted); font-size: 13px; font-weight: 500; padding: 6px 10px; border-radius: var(--radius-sm); transition: all 0.15s; white-space: nowrap; }
+.nav-links a:hover { color: var(--fg); background: var(--bg); }
+.nav-links a.active { color: var(--accent); background: rgba(47,111,235,0.08); }
+
+.market-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.market-toggle button {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-body);
+}
+.market-toggle button.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* ── Page Header ── */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.page-header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 260px;
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+
+.add-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-btn {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.add-btn:hover { opacity: 0.9; }
+
+.search-box:focus-within { border-color: var(--accent); }
+.search-box input { border: none; outline: none; background: transparent; flex: 1; font-size: 13px; color: var(--fg); }
+.search-box input::placeholder { color: var(--muted); }
+.search-box .icon { color: var(--muted); font-size: 14px; }
+
+/* ── Filter Tabs ── */
+.filter-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 24px 12px;
+}
+
+.filter-tab {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s;
+}
+
+.filter-tab:hover { color: var(--fg); background: var(--surface); }
+.filter-tab.active { color: var(--accent); background: rgba(47,111,235,0.08); }
+
+/* ── Table ── */
+.table-wrap {
+  padding: 0 24px 24px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+thead th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+  cursor: pointer;
+}
+
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: rgba(47,111,235,0.03); }
+
+td {
+  padding: 12px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.pair-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pair-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.pair-name { font-weight: 600; }
+.pair-full { font-size: 11px; color: var(--muted); }
+
+.price { font-family: var(--font-mono); font-weight: 600; }
+
+.change { font-family: var(--font-mono); font-weight: 500; padding: 3px 8px; border-radius: var(--radius-sm); font-size: 12px; }
+.change.up { color: var(--success); background: rgba(23,163,74,0.08); }
+.change.down { color: var(--danger); background: rgba(220,38,38,0.08); }
+
+.volume { font-family: var(--font-mono); color: var(--muted); font-size: 12px; }
+
+.chan-status-cell { display: flex; align-items: center; gap: 6px; }
+
+.chan-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.chan-badge.buy { background: rgba(23,163,74,0.1); color: var(--success); }
+.chan-badge.sell { background: rgba(220,38,38,0.1); color: var(--danger); }
+.chan-badge.zhongshu { background: rgba(234,179,8,0.1); color: #B8860B; }
+.chan-badge.neutral { background: var(--bg); color: var(--muted); }
+
+.sparkline { width: 80px; height: 28px; }
+.sparkline canvas { width: 100%; height: 100%; }
+
+.action-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.action-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+
+.remove-btn {
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.remove-btn:hover { background: var(--danger); color: white; border-color: var(--danger); }
+
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  padding: 10px 20px; border-radius: var(--radius); font-size: 13px;
+  font-weight: 500; z-index: 100; opacity: 0; transition: opacity 0.3s;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast.success { background: var(--success); color: white; }
+.toast.error { background: var(--danger); color: white; }
+.toast.warn { background: var(--warn); color: white; }
+
+/* ── Responsive ── */
+@media (max-width: 1023px) {
+  .search-box { width: 200px; }
+  .sparkline { display: none; }
+}
+
+@media (max-width: 767px) {
+  .page-header { padding: 16px; }
+  .table-wrap { padding: 0 16px 16px; }
+  .search-box { width: 100%; }
+  .filter-tabs { padding: 0 16px 10px; overflow-x: auto; }
+
+  table { font-size: 12px; }
+  td, th { padding: 8px 10px; }
+
+  .pair-icon { display: none; }
+  .pair-full { display: none; }
+  .volume { display: none; }
+  .filter-tabs { display: none; }
+}
+
+@media (max-width: 429px) {
+  .page-header h1 { font-size: 17px; }
+  .action-btn { padding: 4px 8px; font-size: 11px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <div class="nav-logo">缠论<span>K线</span></div>
+  <div class="market-toggle">
+    <button data-market="spot">现货</button>
+    <button data-market="futures">合约</button>
+  </div>
+  <div class="nav-links">
+    <a href="/chart">📊 图表</a>
+    <a href="/watchlist" class="active">📋 自选</a>
+    <a href="/signals">🔔 信号</a>
+    <a href="/multi-tf">📐 多周期</a>
+    <a href="/settings">⚙</a>
+  </div>
+</nav>
+
+<div class="page-header">
+  <h1>自选列表</h1>
+  <div class="add-group">
+    <div class="search-box">
+      <span class="icon">🔍</span>
+      <input type="text" placeholder="输入币种名，如 PEPE 或 PEPEUSDT" id="searchInput">
+    </div>
+    <button class="add-btn" id="addSymbolBtn">添加</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="filter-tabs">
+  <button class="filter-tab active">全部</button>
+  <button class="filter-tab">有信号</button>
+  <button class="filter-tab">买点附近</button>
+  <button class="filter-tab">卖点附近</button>
+  <button class="filter-tab">中枢震荡</button>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>交易对</th>
+        <th>最新价</th>
+        <th>24h 涨跌</th>
+        <th>24h 成交量</th>
+        <th>迷你走势</th>
+        <th>缠论状态</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="watchlistBody">
+    </tbody>
+  </table>
+</div>
+
+<script>
+// ── Watchlist persistence ──
+const WL_KEY = 'chanlun_watchlist';
+const DEFAULT_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','LINKUSDT'];
+
+let currentMarketType = localStorage.getItem('chanlun_market_type') || 'spot';
+
+function getWatchlist() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WL_KEY));
+    if (Array.isArray(saved) && saved.length > 0) return saved;
+  } catch(e) {}
+  return [...DEFAULT_SYMBOLS];
+}
+
+function saveWatchlist(list) {
+  localStorage.setItem(WL_KEY, JSON.stringify(list));
+}
+
+let SYMBOLS = getWatchlist();
+
+const tbody = document.getElementById('watchlistBody');
+
+// ── Helpers ──
+
+function symbolShort(sym) { return sym.replace('USDT',''); }
+
+function formatPrice(p) {
+  if (p == null) return '--';
+  if (p >= 1000) return p.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (p >= 1)    return p.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return p.toLocaleString('en', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+}
+
+// Map signal to { chanClass, chanLabel }
+function resolveChanStatus(signal) {
+  if (!signal) return { chanClass: 'neutral', chanLabel: '无信号' };
+  const { direction, state, activeSetup, primaryZhongshu } = signal;
+
+  // Long + READY + active buy setup -> buy confirmation
+  if (direction === 'long' && state === 'READY' && activeSetup && activeSetup.type === 'buy') {
+    const labelMap = { '1': '一买确认', '2': '二买确认', '3': '三买确认' };
+    return { chanClass: 'buy', chanLabel: labelMap[activeSetup.label] || '买点确认' };
+  }
+
+  // Short + READY + active sell setup -> sell confirmation
+  if (direction === 'short' && state === 'READY' && activeSetup && activeSetup.type === 'sell') {
+    const labelMap = { '1': '一卖确认', '2': '二卖确认', '3': '三卖确认' };
+    return { chanClass: 'sell', chanLabel: labelMap[activeSetup.label] || '卖点确认' };
+  }
+
+  // Long + CONFIRMING -> buy warning
+  if (direction === 'long' && state === 'CONFIRMING') {
+    return { chanClass: 'buy', chanLabel: '买点预警' };
+  }
+
+  // Short + CONFIRMING -> sell warning
+  if (direction === 'short' && state === 'CONFIRMING') {
+    return { chanClass: 'sell', chanLabel: '卖点预警' };
+  }
+
+  // Zhongshu oscillation: primaryZhongshu > 0 and neutral direction
+  if (primaryZhongshu > 0 && direction === 'neutral') {
+    return { chanClass: 'zhongshu', chanLabel: '中枢震荡' };
+  }
+
+  return { chanClass: 'neutral', chanLabel: '无信号' };
+}
+
+// Determine if a row matches a filter
+function matchesFilter(filter, chan) {
+  if (filter === '全部') return true;
+  if (filter === '有信号') return chan.chanClass !== 'neutral';
+  if (filter === '买点附近') return chan.chanClass === 'buy';
+  if (filter === '卖点附近') return chan.chanClass === 'sell';
+  if (filter === '中枢震荡') return chan.chanClass === 'zhongshu';
+  return true;
+}
+
+// ── API Calls ──
+
+async function fetchSignal(symbol) {
+  try {
+    const res = await fetch('/api/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, interval: '4h', limit: 300, marketType: currentMarketType })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.signal || null;
+  } catch (e) {
+    console.error('Signal fetch failed for', symbol, e);
+    return null;
+  }
+}
+
+async function fetchPrice(symbol) {
+  try {
+    const res = await fetch('/api/price?symbol=' + symbol + '&interval=4h&marketType=' + currentMarketType);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.error) return null;
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function fetchSparkline(symbol) {
+  try {
+    const res = await fetch('/api/compute/all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, interval: '4h', limit: 20, marketType: currentMarketType })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const klines = data.klines || [];
+    if (Array.isArray(klines) && klines.length > 1) {
+      return klines.map(k => parseFloat(k.close)).filter(n => !isNaN(n));
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// ── Sparkline Drawing (uses real kline closes when available) ──
+
+function drawSparkline(canvas, closes) {
+  const ctx = canvas.getContext('2d');
+  const w = 80, h = 28;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+
+  if (!closes || closes.length < 2) {
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+    return;
+  }
+
+  const mn = Math.min(...closes);
+  const mx = Math.max(...closes);
+  const range = mx - mn || 1;
+  const points = closes.map((c, i) => {
+    const x = (i / (closes.length - 1)) * w;
+    const y = h - 4 - ((c - mn) / range) * (h - 8);
+    return { x, y };
+  });
+
+  const isUp = closes[closes.length - 1] >= closes[0];
+  ctx.strokeStyle = isUp ? '#17A34A' : '#DC2626';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.stroke();
+}
+
+// ── Main Render ──
+
+const rowData = new Map(); // symbol -> { tr, chan }
+
+async function loadAll() {
+  tbody.innerHTML = '';
+
+  // Show loading placeholders
+  SYMBOLS.forEach(sym => {
+    const short = symbolShort(sym);
+    const tr = document.createElement('tr');
+    tr.dataset.symbol = sym;
+    tr.innerHTML = `
+      <td>
+        <div class="pair-cell">
+          <div class="pair-icon">${short.slice(0, 2)}</div>
+          <div>
+            <div class="pair-name">${short}</div>
+            <div class="pair-full">${short}/USDT</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="price" style="color:var(--muted)">--</span></td>
+      <td><span class="change neutral" style="color:var(--muted)">--%</span></td>
+      <td><span class="volume">--</span></td>
+      <td><div class="sparkline"><canvas data-symbol="${sym}"></canvas></div></td>
+      <td>
+        <div class="chan-status-cell">
+          <span class="chan-badge neutral">加载中...</span>
+        </div>
+      </td>
+      <td style="display:flex;gap:4px;align-items:center"><button class="action-btn" onclick="window.location.href='/chart?symbol=${sym}'">看图</button><button class="action-btn" onclick="window.location.href='/multi-tf?symbol=${sym}'" style="color:#8B5CF6;border-color:#8B5CF6">多周期</button><button class="remove-btn" onclick="removeSymbol('${sym}')">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+    rowData.set(sym, { tr, chan: { chanClass: 'neutral', chanLabel: '加载中...' }, price: null });
+  });
+
+  // Fetch data in parallel: signal + price (2 calls per symbol, down from 3)
+  const promises = SYMBOLS.map(async (sym) => {
+    const [signal, priceData] = await Promise.all([
+      fetchSignal(sym),
+      fetchPrice(sym)
+    ]);
+
+    const chan = resolveChanStatus(signal);
+    const finalPrice = priceData ? priceData.price : null;
+    const change = priceData ? priceData.change : null;
+
+    // Sparkline fetched separately (lazy, only for visible rows)
+    return { symbol: sym, signal, price: finalPrice, change, chan };
+  });
+
+  const results = await Promise.all(promises);
+
+  // Update rows with price & signal
+  results.forEach(r => {
+    const { symbol, price, change, chan } = r;
+    const entry = rowData.get(symbol);
+    if (!entry) return;
+    entry.chan = chan;
+    entry.price = price;
+
+    const tr = entry.tr;
+
+    // Price cell
+    const priceCell = tr.querySelector('td:nth-child(2) .price');
+    if (priceCell) {
+      priceCell.textContent = price != null ? formatPrice(price) : '--';
+      priceCell.style.color = '';
+    }
+
+    // Change cell
+    const changeCell = tr.querySelector('td:nth-child(3) .change');
+    if (changeCell && change != null) {
+      changeCell.textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+      changeCell.className = 'change ' + (change >= 0 ? 'up' : 'down');
+      changeCell.style.color = '';
+    }
+
+    // Chan badge
+    const badge = tr.querySelector('.chan-badge');
+    if (badge) {
+      badge.className = 'chan-badge ' + chan.chanClass;
+      badge.textContent = chan.chanLabel;
+    }
+  });
+
+  // Fetch sparklines in background (not blocking)
+  SYMBOLS.forEach(async (sym) => {
+    const closes = await fetchSparkline(sym);
+    if (!closes) return;
+    const entry = rowData.get(sym);
+    if (!entry) return;
+    const canvas = entry.tr.querySelector('.sparkline canvas');
+    if (canvas) drawSparkline(canvas, closes);
+  });
+
+  // Apply current filter
+  applyCurrentFilter();
+}
+
+// ── Filtering ──
+
+let currentFilter = '全部';
+
+function applyCurrentFilter() {
+  const query = document.getElementById('searchInput').value.toLowerCase();
+  rowData.forEach((entry, sym) => {
+    const matchesSearch = !query || entry.tr.textContent.toLowerCase().includes(query);
+    const matchesTab = matchesFilter(currentFilter, entry.chan);
+    entry.tr.style.display = (matchesSearch && matchesTab) ? '' : 'none';
+  });
+}
+
+// Filter tabs
+document.querySelectorAll('.filter-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentFilter = tab.textContent.trim();
+    applyCurrentFilter();
+  });
+});
+
+// Search
+document.getElementById('searchInput').addEventListener('input', () => {
+  applyCurrentFilter();
+});
+
+// ── Toast ──
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg, type) {
+  toastEl.textContent = msg;
+  toastEl.className = 'toast ' + type + ' show';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 2000);
+}
+
+// ── Add / Remove ──
+function normalizeSymbol(input) {
+  let sym = input.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!sym) return null;
+  if (!sym.endsWith('USDT')) sym = sym + 'USDT';
+  return sym;
+}
+
+function addSymbol() {
+  const input = document.getElementById('searchInput');
+  const sym = normalizeSymbol(input.value);
+  if (!sym) { showToast('请输入有效的币种名称', 'warn'); return; }
+  if (SYMBOLS.includes(sym)) { showToast(sym + ' 已在自选列表中', 'warn'); return; }
+
+  SYMBOLS.push(sym);
+  saveWatchlist(SYMBOLS);
+  input.value = '';
+
+  // Append a single row instead of full reload
+  const short = symbolShort(sym);
+  const tr = document.createElement('tr');
+  tr.dataset.symbol = sym;
+  tr.innerHTML = `
+    <td>
+      <div class="pair-cell">
+        <div class="pair-icon">${short.slice(0, 2)}</div>
+        <div>
+          <div class="pair-name">${short}</div>
+          <div class="pair-full">${short}/USDT</div>
+        </div>
+      </div>
+    </td>
+    <td><span class="price" style="color:var(--muted)">--</span></td>
+    <td><span class="change neutral" style="color:var(--muted)">--%</span></td>
+    <td><span class="volume">--</span></td>
+    <td><div class="sparkline"><canvas data-symbol="${sym}"></canvas></div></td>
+    <td>
+      <div class="chan-status-cell">
+        <span class="chan-badge neutral">加载中...</span>
+      </div>
+    </td>
+    <td style="display:flex;gap:4px;align-items:center"><button class="action-btn" onclick="window.location.href='/chart?symbol=${sym}'">看图</button><button class="action-btn" onclick="window.location.href='/multi-tf?symbol=${sym}'" style="color:#8B5CF6;border-color:#8B5CF6">多周期</button><button class="remove-btn" onclick="removeSymbol('${sym}')">✕</button></td>
+  `;
+  tbody.appendChild(tr);
+  rowData.set(sym, { tr, chan: { chanClass: 'neutral', chanLabel: '加载中...' }, price: null });
+
+  // Fetch data for new row
+  (async () => {
+    const [signal, priceData] = await Promise.all([fetchSignal(sym), fetchPrice(sym)]);
+    const chan = resolveChanStatus(signal);
+    const entry = rowData.get(sym);
+    if (!entry) return;
+    entry.chan = chan;
+    entry.price = priceData ? priceData.price : null;
+
+    const priceCell = tr.querySelector('td:nth-child(2) .price');
+    if (priceCell && priceData) { priceCell.textContent = formatPrice(priceData.price); priceCell.style.color = ''; }
+
+    const changeCell = tr.querySelector('td:nth-child(3) .change');
+    if (changeCell && priceData && priceData.change != null) {
+      changeCell.textContent = (priceData.change >= 0 ? '+' : '') + priceData.change.toFixed(2) + '%';
+      changeCell.className = 'change ' + (priceData.change >= 0 ? 'up' : 'down');
+      changeCell.style.color = '';
+    }
+
+    const badge = tr.querySelector('.chan-badge');
+    if (badge) { badge.className = 'chan-badge ' + chan.chanClass; badge.textContent = chan.chanLabel; }
+
+    const closes = await fetchSparkline(sym);
+    if (closes) { const canvas = tr.querySelector('.sparkline canvas'); if (canvas) drawSparkline(canvas, closes); }
+  })();
+
+  showToast(sym + ' 已添加', 'success');
+}
+
+function removeSymbol(sym) {
+  SYMBOLS = SYMBOLS.filter(s => s !== sym);
+  saveWatchlist(SYMBOLS);
+  const entry = rowData.get(sym);
+  if (entry && entry.tr) entry.tr.remove();
+  rowData.delete(sym);
+  showToast(sym + ' 已移除', 'error');
+}
+
+// Add button + Enter key
+document.getElementById('addSymbolBtn').addEventListener('click', addSymbol);
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addSymbol();
+});
+
+// ── Kick off ──
+
+// Market type toggle
+document.querySelectorAll('.market-toggle button').forEach(btn => {
+  if (btn.dataset.market === currentMarketType) btn.classList.add('active');
+  else btn.classList.remove('active');
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.market-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMarketType = btn.dataset.market;
+    localStorage.setItem('chanlun_market_type', currentMarketType);
+    loadAll();
+  });
+});
+
+loadAll();
+</script>
+</body>
+</html>

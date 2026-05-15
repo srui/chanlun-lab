@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缠论K线 — 多周期联动分析</title>
+<style>
+:root {
+  --bg: #F7F8FA;
+  --surface: #FFFFFF;
+  --fg: #111111;
+  --muted: #6B6B6B;
+  --border: #E5E5E5;
+  --accent: #2F6FEB;
+  --success: #17A34A;
+  --danger: #DC2626;
+  --warn: #EAB308;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--fg);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Top Nav ── */
+.top-nav {
+  display: flex; align-items: center; height: 44px; padding: 0 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  gap: 8px; flex-shrink: 0; z-index: 10;
+}
+.nav-logo { font-weight: 700; font-size: 14px; color: var(--fg); margin-right: 8px; white-space: nowrap; letter-spacing: -0.02em; }
+.nav-logo span { color: var(--accent); }
+.nav-links { display: flex; gap: 2px; }
+.nav-links a { text-decoration: none; color: var(--muted); font-size: 12px; font-weight: 500; padding: 5px 8px; border-radius: var(--radius-sm); transition: all 0.15s; white-space: nowrap; }
+.nav-links a:hover { color: var(--fg); background: var(--bg); }
+.nav-links a.active { color: var(--accent); background: rgba(47,111,235,0.08); }
+
+/* ── Period pair selector ── */
+.pair-bar {
+  display: flex; align-items: center; height: 40px; padding: 0 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  gap: 6px; flex-shrink: 0; overflow-x: auto;
+}
+.pair-bar .pair-info {
+  display: flex; align-items: center; gap: 8px; margin-right: 12px;
+}
+.pair-bar .symbol { font-weight: 700; font-size: 14px; font-family: var(--font-mono); }
+.pair-bar .price { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--success); }
+.pair-bar .change { font-family: var(--font-mono); font-size: 11px; padding: 2px 6px; border-radius: 3px; background: rgba(23,163,74,0.1); color: var(--success); }
+
+.tf-pair-btn {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); font-size: 11px; font-weight: 600; cursor: pointer;
+  color: var(--muted); transition: all 0.15s; white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.tf-pair-btn:hover { border-color: var(--accent); color: var(--fg); }
+.tf-pair-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tf-pair-btn .ctx { font-size: 9px; opacity: 0.7; margin-left: 2px; }
+
+/* ── Summary bar ── */
+.summary-bar {
+  display: flex; align-items: center; height: 32px; padding: 0 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  gap: 16px; font-size: 11px; flex-shrink: 0; overflow-x: auto;
+}
+.summary-item { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.summary-item .label { color: var(--muted); }
+.summary-item .value { font-weight: 600; }
+.summary-item .value.green { color: var(--success); }
+.summary-item .value.red { color: var(--danger); }
+.summary-item .value.yellow { color: #B8860B; }
+.verdict {
+  margin-left: auto; padding: 3px 10px; border-radius: 20px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.verdict.bullish { background: rgba(23,163,74,0.1); color: var(--success); }
+.verdict.bearish { background: rgba(220,38,38,0.1); color: var(--danger); }
+.verdict.neutral { background: rgba(234,179,8,0.1); color: #B8860B; }
+
+/* ── Chart layout ── */
+.chart-area {
+  flex: 1; display: flex; flex-direction: column; min-height: 0;
+  background: var(--surface);
+}
+
+.chart-panel {
+  display: flex; flex-direction: column; min-height: 0; position: relative;
+  border-bottom: 1px solid var(--border);
+}
+.chart-panel.main { flex: 3; }
+.chart-panel.ctx { flex: 2; }
+
+.chart-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 12px; background: var(--surface); border-bottom: 1px solid #F0F0F0;
+  flex-shrink: 0; height: 28px;
+}
+.chart-panel-title {
+  font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 6px;
+}
+.chart-panel-title .tf { color: var(--accent); font-family: var(--font-mono); font-size: 12px; }
+.chart-panel-title .ctx-label { color: var(--muted); font-size: 10px; }
+
+.chart-panel-tags {
+  display: flex; gap: 4px;
+}
+.tag {
+  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px;
+}
+.tag.buy { background: rgba(23,163,74,0.1); color: var(--success); }
+.tag.sell { background: rgba(220,38,38,0.1); color: var(--danger); }
+.tag.zhongshu { background: rgba(234,179,8,0.1); color: #B8860B; }
+.tag.info { background: rgba(47,111,235,0.1); color: var(--accent); }
+
+.chart-panel canvas {
+  flex: 1; width: 100%; display: block; cursor: crosshair;
+}
+
+/* ── Bottom alert ── */
+.alert-bar {
+  display: flex; align-items: center; height: 32px; padding: 0 12px;
+  background: var(--surface); border-top: 1px solid var(--border);
+  gap: 16px; font-size: 11px; flex-shrink: 0; overflow-x: auto;
+}
+.alert-item { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dot.green { background: var(--success); }
+.dot.red { background: var(--danger); }
+.dot.yellow { background: var(--warn); }
+
+/* ── Responsive ── */
+@media (max-width: 767px) {
+  .nav-links a { padding: 5px 6px; font-size: 11px; }
+  .summary-bar { flex-wrap: wrap; height: auto; padding: 6px 12px; gap: 6px; }
+  .verdict { margin-left: 0; }
+  .alert-bar { height: auto; padding: 6px 12px; flex-wrap: wrap; }
+}
+
+@media (max-width: 429px) {
+  .summary-item .label { display: none; }
+  .pair-bar .change { display: none; }
+}
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <div class="nav-logo">缠论<span>K线</span></div>
+  <div class="nav-links">
+    <a href="chart.html">图表</a>
+    <a href="watchlist.html">自选</a>
+    <a href="signals.html">信号</a>
+    <a href="multi-tf.html" class="active">多周期</a>
+    <a href="settings.html">设置</a>
+  </div>
+</nav>
+
+<div class="pair-bar">
+  <div class="pair-info">
+    <span class="symbol">BTC/USDT</span>
+    <span class="price" id="livePrice">66,482</span>
+    <span class="change">+2.34%</span>
+  </div>
+  <button class="tf-pair-btn active" data-main="5m" data-ctx="30m">5m<span class="ctx">/30m</span></button>
+  <button class="tf-pair-btn" data-main="15m" data-ctx="1H">15m<span class="ctx">/1H</span></button>
+  <button class="tf-pair-btn" data-main="30m" data-ctx="4H">30m<span class="ctx">/4H</span></button>
+  <button class="tf-pair-btn" data-main="4H" data-ctx="1D">4H<span class="ctx">/1D</span></button>
+  <button class="tf-pair-btn" data-main="1D" data-ctx="1W">1D<span class="ctx">/1W</span></button>
+  <button class="tf-pair-btn" data-main="1W" data-ctx="1M">1W<span class="ctx">/1M</span></button>
+</div>
+
+<div class="summary-bar" id="summaryBar">
+  <div class="summary-item">
+    <span class="label">主周期</span>
+    <span class="value" id="sumMain">5m</span>
+  </div>
+  <div class="summary-item">
+    <span class="label">上级</span>
+    <span class="value" id="sumCtx">30m</span>
+  </div>
+  <div class="summary-item">
+    <span class="label">倍数</span>
+    <span class="value" id="sumMul">×</span>
+  </div>
+  <div class="summary-item">
+    <span class="label">主笔</span>
+    <span class="value green" id="sumBi">&uarr; 上升笔</span>
+  </div>
+  <div class="summary-item">
+    <span class="label">上级段</span>
+    <span class="value" id="sumDuan">&uarr; 上升段</span>
+  </div>
+  <div class="summary-item">
+    <span class="label">趋势</span>
+    <span class="value" id="sumTrend">共振做多</span>
+  </div>
+  <div class="verdict bullish" id="sumVerdict">多周期共振偏多 — 短线回调可加仓</div>
+</div>
+
+<div class="chart-area">
+  <!-- Main period chart -->
+  <div class="chart-panel main">
+    <div class="chart-panel-header">
+      <div class="chart-panel-title">
+        <span class="tf" id="mainTfLabel">5m</span>
+        <span>主周期 · 笔段中枢买卖点</span>
+      </div>
+      <div class="chart-panel-tags" id="mainTags">
+        <span class="tag buy">二买确认</span>
+        <span class="tag zhongshu">中枢震荡</span>
+      </div>
+    </div>
+    <canvas id="mainCanvas"></canvas>
+  </div>
+  <!-- Context period chart -->
+  <div class="chart-panel ctx">
+    <div class="chart-panel-header">
+      <div class="chart-panel-title">
+        <span class="tf" id="ctxTfLabel">30m</span>
+        <span class="ctx-label">上级周期 · 大级别方向</span>
+      </div>
+      <div class="chart-panel-tags" id="ctxTags">
+        <span class="tag info">上升段</span>
+      </div>
+    </div>
+    <canvas id="ctxCanvas"></canvas>
+  </div>
+</div>
+
+<div class="alert-bar">
+  <div class="alert-item"><span class="dot yellow"></span><strong>5m</strong> 顶背驰预警</div>
+  <div class="alert-item"><span class="dot green"></span><strong>30m</strong> 二买确认</div>
+  <div class="alert-item"><span class="dot green"></div><strong>BTC/USDT</strong> 多周期共振做多</div>
+</div>
+
+<script>
+// ── Period Pair Config ──
+const PERIOD_PAIRS = {
+  '5m':  { ctx: '30m', mul: 6,  mainMs: 5*60*1000,   ctxMs: 30*60*1000,   mainLabel: '5m',  ctxLabel: '30m', volatility: 80,  ctxVol: 200 },
+  '15m': { ctx: '1H',  mul: 4,  mainMs: 15*60*1000,  ctxMs: 60*60*1000,   mainLabel: '15m', ctxLabel: '1H',  volatility: 150, ctxVol: 400 },
+  '30m': { ctx: '4H',  mul: 8,  mainMs: 30*60*1000,  ctxMs: 4*60*60*1000,  mainLabel: '30m', ctxLabel: '4H',  volatility: 250, ctxVol: 800 },
+  '4H':  { ctx: '1D',  mul: 6,  mainMs: 4*60*60*1000, ctxMs: 24*60*60*1000, mainLabel: '4H',  ctxLabel: '1D',  volatility: 500, ctxVol: 1500 },
+  '1D':  { ctx: '1W',  mul: 7,  mainMs: 24*60*60*1000, ctxMs: 7*24*60*60*1000, mainLabel: '1D', ctxLabel: '1W', volatility: 1200, ctxVol: 4000 },
+  '1W':  { ctx: '1M',  mul: 4,  mainMs: 7*24*60*60*1000, ctxMs: 30*24*60*60*1000, mainLabel: '1W', ctxLabel: '1M', volatility: 3000, ctxVol: 10000 },
+};
+
+let currentMain = '5m';
+
+// ── Data Generation ──
+function generateKline(count, startPrice, volatility, intervalMs) {
+  const data = [];
+  let price = startPrice;
+  const now = Date.now();
+  for (let i = 0; i < count; i++) {
+    const phase = i / count;
+    let change;
+    if (phase < 0.2) {
+      change = -(0.3 + Math.random() * 0.5) * volatility;
+    } else if (phase < 0.45) {
+      change = Math.sin((i - count * 0.2) * 0.12) * volatility * 0.6;
+    } else if (phase < 0.65) {
+      change = (0.4 + Math.random() * 0.3) * volatility;
+    } else if (phase < 0.8) {
+      change = -(0.2 + Math.random() * 0.3) * volatility;
+    } else {
+      change = (1 - phase) * volatility * 0.8 + (Math.random() - 0.4) * volatility * 0.3;
+    }
+    const noise = (Math.random() - 0.5) * volatility * 0.3;
+    const open = price;
+    const close = price + change + noise;
+    const high = Math.max(open, close) + Math.random() * volatility * 0.4;
+    const low = Math.min(open, close) - Math.random() * volatility * 0.4;
+    const volume = 100 + Math.random() * 300 + (Math.abs(change) / volatility) * 200;
+    data.push({
+      time: new Date(now - (count - i) * intervalMs),
+      open: Math.round(open * 100) / 100,
+      high: Math.round(high * 100) / 100,
+      low: Math.round(low * 100) / 100,
+      close: Math.round(close * 100) / 100,
+      volume: Math.round(volume)
+    });
+    price = close;
+  }
+  return data;
+}
+
+// ── Chan Theory ──
+function computeChan(data) {
+  const bi = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    const isTop = data[i].high > data[i-1].high && data[i].high > data[i-2].high &&
+                  data[i].high > data[i+1].high && data[i].high > data[i+2].high;
+    const isBot = data[i].low < data[i-1].low && data[i].low < data[i-2].low &&
+                  data[i].low < data[i+1].low && data[i].low < data[i+2].low;
+    if (isTop) bi.push({ idx: i, price: data[i].high, type: 'top' });
+    else if (isBot) bi.push({ idx: i, price: data[i].low, type: 'bottom' });
+  }
+  const filtered = [bi[0]];
+  for (let i = 1; i < bi.length; i++) {
+    const last = filtered[filtered.length - 1];
+    if (bi[i].type !== last.type) {
+      filtered.push(bi[i]);
+    } else if (bi[i].type === 'top' && bi[i].price > last.price) {
+      filtered[filtered.length - 1] = bi[i];
+    } else if (bi[i].type === 'bottom' && bi[i].price < last.price) {
+      filtered[filtered.length - 1] = bi[i];
+    }
+  }
+
+  const zhongshu = [];
+  for (let i = 0; i < filtered.length - 3; i += 2) {
+    const a = filtered[i], b = filtered[i+1], c = filtered[i+2], d = filtered[i+3];
+    if (!d) continue;
+    const seg1H = Math.max(a.price, b.price), seg1L = Math.min(a.price, b.price);
+    const seg2H = Math.max(c.price, d.price), seg2L = Math.min(c.price, d.price);
+    const oH = Math.min(seg1H, seg2H), oL = Math.max(seg1L, seg2L);
+    if (oH > oL && (d.idx - a.idx) > 5) {
+      zhongshu.push({ startIdx: a.idx, endIdx: d.idx, highPrice: oH, lowPrice: oL, label: '中枢 ' + (zhongshu.length + 1) });
+    }
+  }
+
+  const duan = [];
+  let ds = 0;
+  for (let i = 3; i < filtered.length; i += 3) {
+    duan.push({ start: filtered[ds].idx, end: filtered[Math.min(i, filtered.length-1)].idx, direction: filtered[ds].type === 'bottom' ? 'up' : 'down' });
+    ds = i;
+  }
+  if (ds < filtered.length - 1) {
+    duan.push({ start: filtered[ds].idx, end: filtered[filtered.length-1].idx, direction: filtered[ds].type === 'bottom' ? 'up' : 'down' });
+  }
+
+  const sigs = [];
+  zhongshu.forEach(z => {
+    let lowest = null, highest = null;
+    filtered.forEach(p => {
+      if (p.idx >= z.startIdx && p.idx <= z.endIdx) {
+        if (p.type === 'bottom' && (!lowest || p.price < lowest.price)) lowest = p;
+        if (p.type === 'top' && (!highest || p.price > highest.price)) highest = p;
+      }
+    });
+    if (lowest) sigs.push({ idx: lowest.idx, price: lowest.price, type: 'buy1', label: '一买' });
+    if (highest) sigs.push({ idx: highest.idx, price: highest.price, type: 'sell1', label: '一卖' });
+  });
+  const lastZ = zhongshu[zhongshu.length - 1];
+  if (lastZ) {
+    const after = filtered.filter(p => p.idx > lastZ.endIdx);
+    for (let i = 0; i < after.length; i++) {
+      if (after[i].type === 'bottom') {
+        if (i >= 1 && after[i].price > after[i-1].price) {
+          sigs.push({ idx: after[i].idx, price: after[i].price, type: 'buy2', label: '二买' });
+        }
+        break;
+      }
+    }
+    for (let i = 0; i < after.length; i++) {
+      if (after[i].type === 'bottom') {
+        if (i >= 2 && after[i].price > (after[i-1]?.price || 0) && after[i].price > lastZ.highPrice) {
+          sigs.push({ idx: after[i].idx, price: after[i].price, type: 'buy3', label: '三买' });
+        }
+        break;
+      }
+    }
+  }
+
+  return { biPoints: filtered, duanSegments: duan, zhongshuZones: zhongshu, signals: sigs };
+}
+
+// ── Chart Engine (shared) ──
+class ChanChart {
+  constructor(canvasId, data, chan, opts = {}) {
+    this.canvas = document.getElementById(canvasId);
+    this.ctx = this.canvas.getContext('2d');
+    this.data = data;
+    this.chan = chan;
+    this.W = 0; this.H = 0; this.dpr = 1;
+    this.pad = { top: 24, right: 64, bottom: 28, left: 6 };
+    this.visibleCount = opts.visibleCount || 80;
+    this.scrollPos = Math.max(0, data.length - this.visibleCount);
+    this.crosshair = null;
+    this.isDragging = false;
+    this.dragStartX = 0;
+    this.dragStartScroll = 0;
+    this.velocity = 0;
+    this.lastMoveX = 0;
+    this.lastMoveTime = 0;
+    this.inertiaRaf = null;
+    this.showLabels = opts.showLabels !== false;
+    this.highlightBar = opts.highlightBar || null;
+
+    this._bind();
+    this.resize();
+  }
+
+  _bind() {
+    const c = this.canvas;
+    // Resize
+    this._resizeHandler = () => this.resize();
+    window.addEventListener('resize', this._resizeHandler);
+
+    // Mouse
+    c.addEventListener('mousedown', e => this._onMouseDown(e));
+    window.addEventListener('mousemove', e => this._onMouseMove(e));
+    window.addEventListener('mouseup', () => this._onMouseUp());
+    c.addEventListener('mouseleave', () => { if (!this.isDragging) { this.crosshair = null; this.queueRender(); } });
+
+    // Touch
+    c.addEventListener('touchstart', e => this._onTouchStart(e), { passive: false });
+    c.addEventListener('touchmove', e => this._onTouchMove(e), { passive: false });
+    c.addEventListener('touchend', () => this._startInertia());
+
+    // Wheel
+    c.addEventListener('wheel', e => this._onWheel(e), { passive: false });
+  }
+
+  resize() {
+    const rect = this.canvas.parentElement.getBoundingClientRect();
+    const headerH = 28;
+    this.dpr = window.devicePixelRatio || 1;
+    this.W = rect.width;
+    this.H = rect.height - headerH;
+    this.canvas.width = this.W * this.dpr;
+    this.canvas.height = this.H * this.dpr;
+    this.canvas.style.width = this.W + 'px';
+    this.canvas.style.height = this.H + 'px';
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.queueRender();
+  }
+
+  queueRender() {
+    if (!this._raf) {
+      this._raf = true;
+      requestAnimationFrame(() => { this._raf = false; this.render(); });
+    }
+  }
+
+  _clamp() {
+    this.scrollPos = Math.max(0, Math.min(this.data.length - this.visibleCount, this.scrollPos));
+  }
+
+  _cancelInertia() { if (this.inertiaRaf) { cancelAnimationFrame(this.inertiaRaf); this.inertiaRaf = null; } }
+
+  _startInertia() {
+    if (Math.abs(this.velocity) < 1) return;
+    const chartW = this.W - this.pad.left - this.pad.right;
+    const step = () => {
+      const ppc = chartW / this.visibleCount;
+      this.scrollPos -= this.velocity / ppc;
+      this._clamp();
+      this.velocity *= 0.93;
+      if (this.scrollPos <= 0 || this.scrollPos >= this.data.length - this.visibleCount) this.velocity = 0;
+      this.queueRender();
+      if (Math.abs(this.velocity) > 0.5) this.inertiaRaf = requestAnimationFrame(step);
+    };
+    this.inertiaRaf = requestAnimationFrame(step);
+  }
+
+  _onMouseDown(e) {
+    this.isDragging = true;
+    this.dragStartX = e.clientX;
+    this.dragStartScroll = this.scrollPos;
+    this.velocity = 0;
+    this.lastMoveX = e.clientX;
+    this.lastMoveTime = performance.now();
+    this.canvas.style.cursor = 'grabbing';
+    this.crosshair = null;
+    this._cancelInertia();
+  }
+
+  _onMouseMove(e) {
+    if (this.isDragging) {
+      const dx = e.clientX - this.dragStartX;
+      const chartW = this.W - this.pad.left - this.pad.right;
+      this.scrollPos = this.dragStartScroll - dx / (chartW / this.visibleCount);
+      this._clamp();
+      const now = performance.now();
+      const dt = now - this.lastMoveTime;
+      if (dt > 0) this.velocity = (e.clientX - this.lastMoveX) / dt * 16;
+      this.lastMoveX = e.clientX;
+      this.lastMoveTime = now;
+      this.queueRender();
+    } else {
+      const rect = this.canvas.getBoundingClientRect();
+      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        this.crosshair = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        this.queueRender();
+      }
+    }
+  }
+
+  _onMouseUp() {
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.canvas.style.cursor = 'crosshair';
+      this._startInertia();
+    }
+  }
+
+  _onTouchStart(e) {
+    e.preventDefault();
+    this._cancelInertia();
+    if (e.touches.length === 1) {
+      this.dragStartX = e.touches[0].clientX;
+      this.dragStartScroll = this.scrollPos;
+      this.velocity = 0;
+      this.lastMoveX = e.touches[0].clientX;
+      this.lastMoveTime = performance.now();
+      this.crosshair = null;
+    }
+  }
+
+  _onTouchMove(e) {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      const dx = e.touches[0].clientX - this.dragStartX;
+      const chartW = this.W - this.pad.left - this.pad.right;
+      this.scrollPos = this.dragStartScroll - dx / (chartW / this.visibleCount);
+      this._clamp();
+      const now = performance.now();
+      const dt = now - this.lastMoveTime;
+      if (dt > 0) this.velocity = (e.touches[0].clientX - this.lastMoveX) / dt * 16;
+      this.lastMoveX = e.touches[0].clientX;
+      this.lastMoveTime = now;
+      this.queueRender();
+    }
+  }
+
+  _onWheel(e) {
+    e.preventDefault();
+    const rect = this.canvas.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const chartW = this.W - this.pad.left - this.pad.right;
+    const candleAtCursor = this.scrollPos + (cursorX - this.pad.left) / (chartW / this.visibleCount);
+    const step = (e.ctrlKey || e.metaKey) ? 1 : (e.deltaY > 0 ? 5 : -5);
+    const newCount = Math.max(30, Math.min(this.data.length, this.visibleCount + step));
+    if (newCount !== this.visibleCount) {
+      this.visibleCount = newCount;
+      this.scrollPos = candleAtCursor - (cursorX - this.pad.left) / (chartW / this.visibleCount);
+      this._clamp();
+      this.queueRender();
+    }
+  }
+
+  _idxToX(idx) {
+    const chartW = this.W - this.pad.left - this.pad.right;
+    const cw = chartW / this.visibleCount;
+    return this.pad.left + (idx - this.scrollPos) * cw + cw / 2;
+  }
+
+  _priceToY(price, pMin, pMax, cH) {
+    return this.pad.top + cH - ((price - pMin) / (pMax - pMin)) * cH;
+  }
+
+  render() {
+    const { ctx, W, H, pad, data, chan } = this;
+    if (!W || !H) return;
+
+    const chartH = H - pad.top - pad.bottom;
+    const chartW = W - pad.left - pad.right;
+    const cw = chartW / this.visibleCount;
+
+    ctx.clearRect(0, 0, W, H);
+
+    const si = Math.floor(this.scrollPos);
+    const vis = data.slice(si, si + this.visibleCount + 2);
+    if (!vis.length) return;
+
+    let pMin = Infinity, pMax = -Infinity, volMax = 0;
+    vis.forEach(d => { pMin = Math.min(pMin, d.low); pMax = Math.max(pMax, d.high); volMax = Math.max(volMax, d.volume); });
+    const pp = (pMax - pMin) * 0.06;
+    pMin -= pp; pMax += pp;
+
+    // Grid
+    ctx.strokeStyle = '#F0F0F0'; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + (chartH / 4) * i;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+      const p = pMax - (pMax - pMin) * (i / 4);
+      ctx.fillStyle = '#999'; ctx.font = '9px ' + getComputedStyle(document.body).getPropertyValue('--font-mono');
+      ctx.textAlign = 'left';
+      ctx.fillText(p.toLocaleString('en', { maximumFractionDigits: 0 }), W - pad.right + 4, y + 3);
+    }
+
+    // Zhongshu
+    chan.zhongshuZones.forEach(z => {
+      const x1 = this._idxToX(z.startIdx) - cw / 2;
+      const x2 = this._idxToX(z.endIdx) + cw / 2;
+      const y1 = this._priceToY(z.highPrice, pMin, pMax, chartH);
+      const y2 = this._priceToY(z.lowPrice, pMin, pMax, chartH);
+      if (x2 < pad.left || x1 > W - pad.right) return;
+      ctx.fillStyle = 'rgba(234,179,8,0.07)';
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.strokeStyle = 'rgba(234,179,8,0.25)'; ctx.lineWidth = 0.8;
+      ctx.setLineDash([3, 2]); ctx.strokeRect(x1, y1, x2 - x1, y2 - y1); ctx.setLineDash([]);
+      if (this.showLabels) {
+        ctx.fillStyle = 'rgba(180,140,0,0.5)'; ctx.font = '9px system-ui';
+        ctx.textAlign = 'left'; ctx.fillText(z.label, x1 + 3, y1 + 10);
+      }
+    });
+
+    // Duan segments
+    ctx.lineWidth = 2;
+    chan.duanSegments.forEach(seg => {
+      const x1 = this._idxToX(seg.start), x2 = this._idxToX(seg.end);
+      if (x2 < pad.left || x1 > W - pad.right) return;
+      const sb = chan.biPoints.find(p => p.idx === seg.start);
+      const eb = chan.biPoints.find(p => p.idx === seg.end);
+      if (!sb || !eb) return;
+      const y1 = this._priceToY(sb.price, pMin, pMax, chartH);
+      const y2 = this._priceToY(eb.price, pMin, pMax, chartH);
+      ctx.strokeStyle = 'rgba(139,92,246,0.5)';
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    });
+
+    // Candles
+    vis.forEach((d, i) => {
+      const x = pad.left + (si + i - this.scrollPos) * cw;
+      if (x + cw < pad.left || x > W - pad.right) return;
+      const isUp = d.close >= d.open;
+      const color = isUp ? '#17A34A' : '#DC2626';
+      const bTop = this._priceToY(Math.max(d.open, d.close), pMin, pMax, chartH);
+      const bBot = this._priceToY(Math.min(d.open, d.close), pMin, pMax, chartH);
+      const wTop = this._priceToY(d.high, pMin, pMax, chartH);
+      const wBot = this._priceToY(d.low, pMin, pMax, chartH);
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x + cw / 2, wTop); ctx.lineTo(x + cw / 2, wBot); ctx.stroke();
+      if (isUp) { ctx.strokeRect(x + 0.5, bTop + 0.5, cw - 1, Math.max(1, bBot - bTop)); }
+      else { ctx.fillStyle = color; ctx.fillRect(x, bTop, cw, Math.max(1, bBot - bTop)); }
+    });
+
+    // Volume
+    const volH = 30; const volBase = H - 4;
+    vis.forEach((d, i) => {
+      const x = pad.left + (si + i - this.scrollPos) * cw;
+      if (x + cw < pad.left || x > W - pad.right) return;
+      const isUp = d.close >= d.open;
+      const bh = (d.volume / volMax) * volH;
+      ctx.fillStyle = isUp ? 'rgba(23,163,74,0.12)' : 'rgba(220,38,38,0.12)';
+      ctx.fillRect(x, volBase - bh, cw, bh);
+    });
+
+    // Bi segments
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < chan.biPoints.length - 1; i++) {
+      const p1 = chan.biPoints[i], p2 = chan.biPoints[i + 1];
+      const x1 = this._idxToX(p1.idx), x2 = this._idxToX(p2.idx);
+      if (Math.max(x1, x2) < pad.left || Math.min(x1, x2) > W - pad.right) continue;
+      const y1 = this._priceToY(p1.price, pMin, pMax, chartH);
+      const y2 = this._priceToY(p2.price, pMin, pMax, chartH);
+      ctx.strokeStyle = '#2F6FEB'; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      [p1, p2].forEach(p => {
+        const px = this._idxToX(p.idx);
+        if (px < pad.left || px > W - pad.right) return;
+        const py = this._priceToY(p.price, pMin, pMax, chartH);
+        ctx.fillStyle = '#2F6FEB'; ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+      });
+    }
+
+    // Signals
+    chan.signals.forEach(s => {
+      const x = this._idxToX(s.idx);
+      if (x < pad.left || x > W - pad.right) return;
+      const isBuy = s.type.startsWith('buy');
+      const yOff = isBuy ? 14 : -14;
+      const y = this._priceToY(s.price, pMin, pMax, chartH) + yOff;
+      ctx.fillStyle = isBuy ? '#17A34A' : '#DC2626';
+      ctx.beginPath();
+      if (isBuy) { ctx.moveTo(x, y - 8); ctx.lineTo(x - 5, y); ctx.lineTo(x + 5, y); }
+      else { ctx.moveTo(x, y + 8); ctx.lineTo(x - 5, y); ctx.lineTo(x + 5, y); }
+      ctx.fill();
+      if (this.showLabels) {
+        ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText(s.label, x, isBuy ? y - 10 : y + 18);
+      }
+    });
+
+    // Last price line
+    const last = data[data.length - 1];
+    if (last) {
+      const ly = this._priceToY(last.close, pMin, pMax, chartH);
+      const isUp = last.close >= last.open;
+      ctx.strokeStyle = isUp ? '#17A34A' : '#DC2626'; ctx.lineWidth = 0.7;
+      ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(pad.left, ly); ctx.lineTo(W - pad.right, ly); ctx.stroke(); ctx.setLineDash([]);
+      const ps = last.close.toLocaleString('en', { maximumFractionDigits: 0 });
+      ctx.fillStyle = isUp ? '#17A34A' : '#DC2626';
+      ctx.fillRect(W - pad.right, ly - 7, ctx.measureText(ps).width + 10, 14);
+      ctx.fillStyle = '#fff'; ctx.font = '9px ' + getComputedStyle(document.body).getPropertyValue('--font-mono');
+      ctx.textAlign = 'left'; ctx.fillText(ps, W - pad.right + 4, ly + 3);
+    }
+
+    // Highlight bar (for context period sync)
+    if (this.highlightBar !== null) {
+      const hx1 = this._idxToX(this.highlightBar.start) - cw / 2;
+      const hx2 = this._idxToX(this.highlightBar.end) + cw / 2;
+      ctx.fillStyle = 'rgba(47,111,235,0.06)';
+      ctx.fillRect(hx1, pad.top, hx2 - hx1, chartH);
+      ctx.strokeStyle = 'rgba(47,111,235,0.25)'; ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]); ctx.strokeRect(hx1, pad.top, hx2 - hx1, chartH); ctx.setLineDash([]);
+    }
+
+    // Time axis
+    const tstep = Math.max(1, Math.round(60 / Math.max(1, cw)));
+    ctx.fillStyle = '#999'; ctx.font = '8px ' + getComputedStyle(document.body).getPropertyValue('--font-mono');
+    ctx.textAlign = 'center';
+    for (let i = 0; i < vis.length; i += tstep) {
+      const x = pad.left + (si + i - this.scrollPos) * cw + cw / 2;
+      if (x < pad.left || x > W - pad.right) continue;
+      const d = vis[i].time;
+      const label = (d.getMonth() + 1) + '/' + d.getDate() + ' ' + d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+      ctx.fillText(label, x, H - 4);
+    }
+
+    // Crosshair
+    if (this.crosshair) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 0.5; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(this.crosshair.x, pad.top); ctx.lineTo(this.crosshair.x, H - pad.bottom); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pad.left, this.crosshair.y); ctx.lineTo(W - pad.right, this.crosshair.y); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+// ── State ──
+let mainChart = null, ctxChart = null;
+let mainData = null, ctxData = null;
+let mainChan = null, ctxChan = null;
+
+function buildPair(mainKey) {
+  const pair = PERIOD_PAIRS[mainKey];
+  const mainCount = 300;
+  const ctxCount = Math.round(mainCount / pair.mul);
+
+  mainData = generateKline(mainCount, 62800, pair.volatility, pair.mainMs);
+  ctxData = generateKline(ctxCount, 62800 - pair.ctxVol * 0.5, pair.ctxVol, pair.ctxMs);
+
+  mainChan = computeChan(mainData);
+  ctxChan = computeChan(ctxData);
+
+  // Update labels
+  document.getElementById('mainTfLabel').textContent = pair.mainLabel;
+  document.getElementById('ctxTfLabel').textContent = pair.ctxLabel;
+  document.getElementById('sumMain').textContent = pair.mainLabel;
+  document.getElementById('sumCtx').textContent = pair.ctxLabel;
+  document.getElementById('sumMul').textContent = '×' + pair.mul;
+
+  // Analyze chan status
+  const lastBi = mainChan.biPoints[mainChan.biPoints.length - 1];
+  const lastCtxDuan = ctxChan.duanSegments[ctxChan.duanSegments.length - 1];
+  const mainBiDir = lastBi ? (lastBi.type === 'bottom' ? '↑ 上升笔' : '↓ 下降笔') : '—';
+  const ctxDuanDir = lastCtxDuan ? (lastCtxDuan.direction === 'up' ? '↑ 上升段' : '↓ 下降段') : '—';
+  const mainBiColor = lastBi && lastBi.type === 'bottom' ? 'green' : 'red';
+  const ctxDuanColor = lastCtxDuan && lastCtxDuan.direction === 'up' ? '' : 'red';
+
+  document.getElementById('sumBi').textContent = mainBiDir;
+  document.getElementById('sumBi').className = 'value ' + mainBiColor;
+  document.getElementById('sumDuan').textContent = ctxDuanDir;
+  if (ctxDuanColor) document.getElementById('sumDuan').className = 'value ' + ctxDuanColor;
+
+  // Resonance verdict
+  const mainBull = lastBi && lastBi.type === 'bottom';
+  const ctxBull = lastCtxDuan && lastCtxDuan.direction === 'up';
+  const verdictEl = document.getElementById('sumVerdict');
+  const trendEl = document.getElementById('sumTrend');
+
+  if (mainBull && ctxBull) {
+    verdictEl.textContent = '多周期共振偏多 — 短线回调可加仓';
+    verdictEl.className = 'verdict bullish';
+    trendEl.textContent = '共振做多';
+    trendEl.className = 'value green';
+  } else if (!mainBull && !ctxBull) {
+    verdictEl.textContent = '多周期共振偏空 — 观望或减仓';
+    verdictEl.className = 'verdict bearish';
+    trendEl.textContent = '共振做空';
+    trendEl.className = 'value red';
+  } else {
+    verdictEl.textContent = '周期方向不一 — 谨慎操作';
+    verdictEl.className = 'verdict neutral';
+    trendEl.textContent = '方向分歧';
+    trendEl.className = 'value yellow';
+  }
+
+  // Tags
+  const mainTags = document.getElementById('mainTags');
+  const mainSigs = mainChan.signals.slice(-3);
+  mainTags.innerHTML = mainSigs.map(s => {
+    const cls = s.type.startsWith('buy') ? 'buy' : 'sell';
+    return '<span class="tag ' + cls + '">' + s.label + '</span>';
+  }).join('');
+  if (mainChan.zhongshuZones.length > 0) {
+    mainTags.innerHTML += '<span class="tag zhongshu">中枢震荡</span>';
+  }
+
+  const ctxTags = document.getElementById('ctxTags');
+  ctxTags.innerHTML = '<span class="tag info">' + ctxDuanDir + '</span>';
+  const ctxSigs = ctxChan.signals.slice(-2);
+  ctxTags.innerHTML += ctxSigs.map(s => {
+    const cls = s.type.startsWith('buy') ? 'buy' : 'sell';
+    return '<span class="tag ' + cls + '">' + s.label + '</span>';
+  }).join('');
+
+  // Cleanup old charts
+  if (mainChart) { window.removeEventListener('resize', mainChart._resizeHandler); }
+  if (ctxChart) { window.removeEventListener('resize', ctxChart._resizeHandler); }
+
+  // Highlight: show which main-period bars map to the current context bar
+  const ctxHighlight = null; // could compute mapping here
+
+  mainChart = new ChanChart('mainCanvas', mainData, mainChan, { visibleCount: 80, showLabels: true });
+  ctxChart = new ChanChart('ctxCanvas', ctxData, ctxChan, { visibleCount: 60, showLabels: true });
+
+  // Sync scrolling: when main scrolls, highlight the corresponding region on ctx
+  const origMainRender = mainChart.render.bind(mainChart);
+  mainChart.render = function() {
+    origMainRender();
+    // Compute which context bars the visible main range maps to
+    const si = Math.floor(mainChart.scrollPos);
+    const ei = si + mainChart.visibleCount;
+    const pair = PERIOD_PAIRS[currentMain];
+    const ctxStartIdx = Math.floor(si / pair.mul);
+    const ctxEndIdx = Math.ceil(ei / pair.mul);
+    if (ctxChart && ctxChart.data.length > 0) {
+      ctxChart.highlightBar = { start: ctxStartIdx, end: ctxEndIdx };
+      ctxChart.queueRender();
+    }
+  };
+}
+
+// Period pair buttons
+document.querySelectorAll('.tf-pair-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tf-pair-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMain = btn.dataset.main;
+    buildPair(currentMain);
+  });
+});
+
+// Initial build
+buildPair('5m');
+
+// Live price tick
+setInterval(() => {
+  if (!mainData || !mainData.length) return;
+  const last = mainData[mainData.length - 1];
+  const tick = (Math.random() - 0.48) * 20;
+  last.close = Math.round((last.close + tick) * 100) / 100;
+  last.high = Math.max(last.high, last.close);
+  last.low = Math.min(last.low, last.close);
+  document.getElementById('livePrice').textContent = last.close.toLocaleString('en', { maximumFractionDigits: 0 });
+  if (mainChart) mainChart.queueRender();
+}, 2000);
+</script>
+</body>
+</html>

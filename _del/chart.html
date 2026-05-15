@@ -1,0 +1,1465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缠论K线 — BTC/USDT</title>
+<style>
+:root {
+  --bg: #F7F8FA;
+  --surface: #FFFFFF;
+  --fg: #111111;
+  --muted: #6B6B6B;
+  --border: #E5E5E5;
+  --accent: #2F6FEB;
+  --success: #17A34A;
+  --danger: #DC2626;
+  --warn: #EAB308;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--fg);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Top Nav ── */
+.top-nav {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.nav-logo {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--fg);
+  margin-right: 8px;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+}
+
+.nav-logo span { color: var(--accent); }
+
+.pair-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.pair-selector .arrow { font-size: 10px; color: var(--muted); }
+
+.price-display {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.price-current {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--success);
+}
+
+.price-change {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(23,163,74,0.1);
+  color: var(--success);
+}
+
+.price-change.down {
+  background: rgba(220,38,38,0.1);
+  color: var(--danger);
+}
+
+.nav-links {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.nav-links a {
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.nav-links a:hover { color: var(--fg); background: var(--bg); }
+.nav-links a.active { color: var(--accent); background: rgba(47,111,235,0.08); }
+
+/* ── Toolbar ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tf-group {
+  display: flex;
+  gap: 2px;
+}
+
+.tf-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s;
+}
+
+.tf-btn:hover { color: var(--fg); background: var(--bg); }
+.tf-btn.active { color: var(--accent); background: rgba(47,111,235,0.08); font-weight: 600; }
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 6px;
+}
+
+.tool-group {
+  display: flex;
+  gap: 2px;
+}
+
+.tool-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.tool-btn:hover { color: var(--fg); background: var(--bg); }
+.tool-btn.active { color: var(--accent); background: rgba(47,111,235,0.08); }
+
+.tool-btn svg { width: 16px; height: 16px; }
+
+.chan-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chan-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s;
+}
+
+.chan-toggle label:hover { background: var(--bg); }
+
+.chan-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+/* ── Main Layout ── */
+.main-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Chart Area ── */
+.chart-area {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  background: var(--surface);
+}
+
+.chart-area canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.chart-legend {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.chart-legend span { display: flex; align-items: center; gap: 4px; }
+.chart-legend .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* ── OHLCV Tooltip ── */
+.ohlcv-tooltip {
+  position: absolute;
+  top: 8px;
+  right: 80px;
+  background: rgba(255,255,255,0.92);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  pointer-events: none;
+  display: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+.ohlcv-tooltip .tt-time { color: var(--muted); margin-bottom: 2px; font-size: 10px; }
+.ohlcv-tooltip .tt-row { display: flex; gap: 4px; }
+.ohlcv-tooltip .tt-label { color: var(--muted); width: 16px; }
+.ohlcv-tooltip .tt-val { font-weight: 500; }
+.ohlcv-tooltip .tt-val.up { color: var(--success); }
+.ohlcv-tooltip .tt-val.down { color: var(--danger); }
+
+/* ── Right Signal Panel ── */
+.signal-panel {
+  width: 280px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-header .badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+}
+
+.signal-section {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.signal-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.signal-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.signal-item:hover { opacity: 0.8; }
+
+.signal-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.signal-icon.buy { background: rgba(23,163,74,0.12); color: var(--success); }
+.signal-icon.sell { background: rgba(220,38,38,0.12); color: var(--danger); }
+.signal-icon.warn { background: rgba(234,179,8,0.12); color: var(--warn); }
+
+.signal-info { flex: 1; min-width: 0; }
+
+.signal-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.signal-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.signal-price {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.signal-price.up { color: var(--success); }
+.signal-price.down { color: var(--danger); }
+
+/* ── Divergence Alert ── */
+.divergence-alert {
+  margin: 10px 14px;
+  padding: 10px 12px;
+  background: rgba(234,179,8,0.06);
+  border: 1px solid rgba(234,179,8,0.2);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.divergence-alert .icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.divergence-alert .text {
+  font-size: 12px;
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+.divergence-alert .text strong {
+  color: var(--warn);
+  display: block;
+  margin-bottom: 2px;
+}
+
+/* ── Chan Theory Status ── */
+.chan-status {
+  margin: 10px 14px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.chan-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.chan-status-row .label { color: var(--muted); }
+.chan-status-row .value { font-weight: 500; font-family: var(--font-mono); font-size: 12px; }
+
+/* ── Panel scrollable ── */
+.panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 14px;
+}
+
+.panel-scroll::-webkit-scrollbar { width: 4px; }
+.panel-scroll::-webkit-scrollbar-track { background: transparent; }
+.panel-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Bottom Alert Bar ── */
+.alert-bar {
+  height: 32px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 16px;
+  font-size: 12px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.alert-bar .alert-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.alert-bar .alert-item .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.alert-bar .alert-item .dot.green { background: var(--success); }
+.alert-bar .alert-item .dot.red { background: var(--danger); }
+.alert-bar .alert-item .dot.yellow { background: var(--warn); }
+
+.alert-bar .alert-item strong { color: var(--fg); font-weight: 500; }
+
+/* ── Responsive ── */
+@media (max-width: 1023px) {
+  .signal-panel { width: 240px; }
+  .nav-links a span { display: none; }
+}
+
+@media (max-width: 767px) {
+  .top-nav { padding: 0 8px; gap: 4px; }
+  .nav-logo { font-size: 13px; }
+  .price-display { display: none; }
+  .nav-links { display: none; }
+
+  .toolbar { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .chan-toggle { display: none; }
+
+  .main-layout { flex-direction: column; }
+
+  .chart-area { flex: none; height: 55vh; }
+
+  .signal-panel {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    flex: 1;
+  }
+
+  .alert-bar { display: none; }
+  .ohlcv-tooltip { display: none !important; }
+}
+
+@media (max-width: 429px) {
+  .pair-selector { font-size: 12px; padding: 3px 8px; }
+  .tf-btn { padding: 3px 7px; font-size: 11px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Top Nav ── -->
+<nav class="top-nav">
+  <div class="nav-logo">缠论<span>K线</span></div>
+  <div class="pair-selector">
+    BTC/USDT <span class="arrow">&#9662;</span>
+  </div>
+  <div class="price-display">
+    <span class="price-current" id="priceDisplay">66,482.30</span>
+    <span class="price-change" id="priceChange">+2.34%</span>
+  </div>
+  <div class="nav-links">
+    <a href="chart.html" class="active"><span>&#128202;</span> 图表</a>
+    <a href="watchlist.html"><span>&#128203;</span> 自选</a>
+    <a href="signals.html"><span>&#128276;</span> 信号</a>
+    <a href="multi-tf.html"><span>&#128208;</span> 多周期</a>
+    <a href="settings.html"><span>&#9881;</span></a>
+  </div>
+</nav>
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+  <div class="tf-group">
+    <button class="tf-btn" data-tf="1m">1m</button>
+    <button class="tf-btn" data-tf="5m">5m</button>
+    <button class="tf-btn active" data-tf="15m">15m</button>
+    <button class="tf-btn" data-tf="1H">1H</button>
+    <button class="tf-btn" data-tf="4H">4H</button>
+    <button class="tf-btn" data-tf="1D">1D</button>
+    <button class="tf-btn" data-tf="1W">1W</button>
+  </div>
+  <div class="toolbar-divider"></div>
+  <div class="tool-group">
+    <button class="tool-btn active" title="光标" id="toolCursor">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2l4 12 1.5-5L14 7z"/></svg>
+    </button>
+    <button class="tool-btn" title="十字线" id="toolCross">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
+    </button>
+    <button class="tool-btn" title="趋势线" id="toolTrend">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="2" y1="14" x2="14" y2="2"/></svg>
+    </button>
+    <button class="tool-btn" title="斐波那契" id="toolFib">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="2" rx="1"/><rect x="2" y="6" width="8" height="2" rx="1"/><rect x="2" y="10" width="5" height="2" rx="1"/><rect x="2" y="14" width="3" height="2" rx="1"/></svg>
+    </button>
+  </div>
+  <div class="toolbar-divider"></div>
+  <div class="chan-toggle">
+    <label><input type="checkbox" id="showBi" checked> 笔</label>
+    <label><input type="checkbox" id="showDuan" checked> 段</label>
+    <label><input type="checkbox" id="showZhongshu" checked> 中枢</label>
+    <label><input type="checkbox" id="showSignals" checked> 信号</label>
+    <label><input type="checkbox" id="showMACD" checked> MACD</label>
+  </div>
+</div>
+
+<!-- ── Main Layout ── -->
+<div class="main-layout">
+  <!-- Chart -->
+  <div class="chart-area">
+    <canvas id="chartCanvas"></canvas>
+    <div class="chart-legend">
+      <span><span class="dot" style="background:#2F6FEB"></span> 笔 (Bi)</span>
+      <span><span class="dot" style="background:#8B5CF6"></span> 段 (Duan)</span>
+      <span><span class="dot" style="background:rgba(234,179,8,0.3)"></span> 中枢</span>
+      <span style="color:var(--success)">&#9650; 买点</span>
+      <span style="color:var(--danger)">&#9660; 卖点</span>
+    </div>
+    <div class="ohlcv-tooltip" id="ohlcvTooltip">
+      <div class="tt-time" id="ttTime"></div>
+      <div class="tt-row"><span class="tt-label">O</span><span class="tt-val" id="ttOpen"></span></div>
+      <div class="tt-row"><span class="tt-label">H</span><span class="tt-val" id="ttHigh"></span></div>
+      <div class="tt-row"><span class="tt-label">L</span><span class="tt-val" id="ttLow"></span></div>
+      <div class="tt-row"><span class="tt-label">C</span><span class="tt-val" id="ttClose"></span></div>
+      <div class="tt-row"><span class="tt-label">V</span><span class="tt-val" id="ttVol"></span></div>
+    </div>
+  </div>
+
+  <!-- Signal Panel -->
+  <aside class="signal-panel">
+    <div class="panel-header">
+      信号面板 <span class="badge">5</span>
+    </div>
+    <div class="panel-scroll">
+      <!-- Chan Theory Status -->
+      <div class="chan-status">
+        <div class="chan-status-row">
+          <span class="label">当前笔方向</span>
+          <span class="value" style="color:var(--success)">&#8593; 上升笔</span>
+        </div>
+        <div class="chan-status-row">
+          <span class="label">中枢位置</span>
+          <span class="value">64,200 &mdash; 65,100</span>
+        </div>
+        <div class="chan-status-row">
+          <span class="label">当前段</span>
+          <span class="value">第 3 段 &#8593;</span>
+        </div>
+        <div class="chan-status-row">
+          <span class="label">离开中枢</span>
+          <span class="value" style="color:var(--success)">+1,382</span>
+        </div>
+      </div>
+
+      <!-- Divergence Alert -->
+      <div class="divergence-alert">
+        <div class="icon">&#9888;&#65039;</div>
+        <div class="text">
+          <strong>顶背驰预警 &mdash; 15m</strong>
+          MACD 黄白线死叉，红柱缩短。当前上涨力度弱于前一波段，注意二卖形成。
+        </div>
+      </div>
+
+      <!-- Buy Signals -->
+      <div class="signal-section">
+        <div class="signal-section-title">买点信号</div>
+        <div class="signal-item">
+          <div class="signal-icon buy">1</div>
+          <div class="signal-info">
+            <div class="signal-label">一买 &middot; 中枢下方</div>
+            <div class="signal-meta">15m &middot; 2024-01-15 14:30</div>
+          </div>
+          <div class="signal-price up">63,850</div>
+        </div>
+        <div class="signal-item">
+          <div class="signal-icon buy">2</div>
+          <div class="signal-info">
+            <div class="signal-label">二买 &middot; 回踩确认</div>
+            <div class="signal-meta">15m &middot; 2024-01-16 09:15</div>
+          </div>
+          <div class="signal-price up">64,120</div>
+        </div>
+        <div class="signal-item">
+          <div class="signal-icon buy">3</div>
+          <div class="signal-info">
+            <div class="signal-label">三买 &middot; 中枢上沿</div>
+            <div class="signal-meta">15m &middot; 2024-01-18 20:45</div>
+          </div>
+          <div class="signal-price up">65,180</div>
+        </div>
+      </div>
+
+      <!-- Sell Signals -->
+      <div class="signal-section">
+        <div class="signal-section-title">卖点信号</div>
+        <div class="signal-item">
+          <div class="signal-icon sell">1</div>
+          <div class="signal-info">
+            <div class="signal-label">一卖 &middot; 背驰段</div>
+            <div class="signal-meta">15m &middot; 2024-01-19 16:00</div>
+          </div>
+          <div class="signal-price down">66,820</div>
+        </div>
+        <div class="signal-item">
+          <div class="signal-icon warn">&#9889;</div>
+          <div class="signal-info">
+            <div class="signal-label">背驰预警 &middot; 力度减弱</div>
+            <div class="signal-meta">15m &middot; 即时</div>
+          </div>
+          <div class="signal-price down">66,482</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ── Bottom Alert Bar ── -->
+<div class="alert-bar">
+  <div class="alert-item">
+    <span class="dot yellow"></span>
+    <strong>BTC/USDT</strong> 顶背驰预警 &middot; 15m
+  </div>
+  <div class="alert-item">
+    <span class="dot green"></span>
+    <strong>ETH/USDT</strong> 二买确认 &middot; 1H
+  </div>
+  <div class="alert-item">
+    <span class="dot red"></span>
+    <strong>SOL/USDT</strong> 一卖触发 &middot; 4H
+  </div>
+  <div class="alert-item">
+    <span class="dot green"></span>
+    <strong>BNB/USDT</strong> 三买形成 &middot; 1D
+  </div>
+</div>
+
+<script>
+// ── Smooth K-Line Chart Engine ──
+// Sub-pixel scrolling, rAF batching, inertia, zoom-to-cursor
+
+const canvas = document.getElementById('chartCanvas');
+const ctx = canvas.getContext('2d');
+const tooltipEl = document.getElementById('ohlcvTooltip');
+let W, H, dpr;
+
+// ── rAF batching ──
+let rafPending = false;
+function queueRender() {
+  if (!rafPending) {
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      render();
+    });
+  }
+}
+
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  W = rect.width;
+  H = rect.height;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  queueRender();
+}
+
+window.addEventListener('resize', resize);
+
+// ── Generate realistic BTC/USDT data ──
+function generateData(count) {
+  const data = [];
+  let price = 62800;
+  const now = Date.now();
+  const interval = 15 * 60 * 1000;
+
+  for (let i = 0; i < count; i++) {
+    let open, high, low, close, volume;
+
+    if (i < 25) {
+      const ts = 0.3 + Math.random() * 0.4;
+      const change = (-ts * 80 + (Math.random() - 0.5) * 120);
+      open = price; close = price + change;
+      high = Math.max(open, close) + Math.random() * 60;
+      low = Math.min(open, close) - Math.random() * 80;
+      volume = 200 + Math.random() * 300;
+    } else if (i < 65) {
+      const basePrice = 63800 + Math.sin((i - 25) * 0.15) * 400;
+      const noise = (Math.random() - 0.5) * 200;
+      open = price; close = basePrice + noise;
+      high = Math.max(open, close) + Math.random() * 100;
+      low = Math.min(open, close) - Math.random() * 100;
+      volume = 150 + Math.random() * 200;
+    } else if (i < 90) {
+      const ts = 0.5 + Math.random() * 0.3;
+      const change = ts * 100 + Math.random() * 60;
+      open = price; close = price + change;
+      high = Math.max(open, close) + Math.random() * 80;
+      low = Math.min(open, close) - Math.random() * 40;
+      volume = 300 + Math.random() * 400;
+    } else if (i < 105) {
+      const change = -(Math.random() * 80 + 20) + (Math.random() - 0.3) * 50;
+      open = price; close = price + change;
+      high = Math.max(open, close) + Math.random() * 60;
+      low = Math.min(open, close) - Math.random() * 70;
+      volume = 200 + Math.random() * 250;
+    } else {
+      const phase = (i - 105) / (count - 105);
+      const momentum = (1 - phase * 0.6) * 80;
+      const change = momentum + (Math.random() - 0.4) * 60;
+      open = price; close = price + change;
+      high = Math.max(open, close) + Math.random() * 70;
+      low = Math.min(open, close) - Math.random() * 50;
+      volume = 150 + Math.random() * 200 + (phase < 0.5 ? 100 : 0);
+    }
+
+    price = close;
+    data.push({
+      time: new Date(now - (count - i) * interval),
+      open: Math.round(open * 100) / 100,
+      high: Math.round(high * 100) / 100,
+      low: Math.round(low * 100) / 100,
+      close: Math.round(close * 100) / 100,
+      volume: Math.round(volume)
+    });
+  }
+  return data;
+}
+
+const klineData = generateData(500);
+
+// ── Chan Theory Annotations ──
+function computeChanAnnotations(data) {
+  const bi = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    const isTop = data[i].high > data[i-1].high && data[i].high > data[i-2].high &&
+                  data[i].high > data[i+1].high && data[i].high > data[i+2].high;
+    const isBot = data[i].low < data[i-1].low && data[i].low < data[i-2].low &&
+                  data[i].low < data[i+1].low && data[i].low < data[i+2].low;
+    if (isTop) bi.push({ idx: i, price: data[i].high, type: 'top' });
+    else if (isBot) bi.push({ idx: i, price: data[i].low, type: 'bottom' });
+  }
+  const filtered = [bi[0]];
+  for (let i = 1; i < bi.length; i++) {
+    const last = filtered[filtered.length - 1];
+    if (bi[i].type !== last.type) {
+      filtered.push(bi[i]);
+    } else if (bi[i].type === 'top' && bi[i].price > last.price) {
+      filtered[filtered.length - 1] = bi[i];
+    } else if (bi[i].type === 'bottom' && bi[i].price < last.price) {
+      filtered[filtered.length - 1] = bi[i];
+    }
+  }
+
+  const zhongshu = [];
+  for (let i = 0; i < filtered.length - 2; i += 2) {
+    const seg1High = Math.max(filtered[i].price, filtered[i+1].price);
+    const seg1Low = Math.min(filtered[i].price, filtered[i+1].price);
+    if (i + 3 < filtered.length) {
+      const seg2High = Math.max(filtered[i+1].price, filtered[i+2].price);
+      const seg2Low = Math.min(filtered[i+1].price, filtered[i+2].price);
+      const overlapHigh = Math.min(seg1High, seg2High);
+      const overlapLow = Math.max(seg1Low, seg2Low);
+      if (overlapHigh > overlapLow && (filtered[i+2].idx - filtered[i].idx) > 5) {
+        zhongshu.push({
+          startIdx: filtered[i].idx,
+          endIdx: filtered[i+2].idx,
+          highPrice: overlapHigh,
+          lowPrice: overlapLow,
+          label: '\u4E2D\u67A2 ' + (zhongshu.length + 1)
+        });
+      }
+    }
+  }
+
+  const duan = [];
+  let duanStart = 0;
+  for (let i = 2; i < filtered.length; i += 3) {
+    if (i < filtered.length) {
+      duan.push({
+        start: filtered[duanStart].idx,
+        end: filtered[Math.min(i, filtered.length - 1)].idx,
+        direction: filtered[duanStart].type === 'bottom' ? 'up' : 'down'
+      });
+      duanStart = i;
+    }
+  }
+  if (duanStart < filtered.length - 1) {
+    duan.push({
+      start: filtered[duanStart].idx,
+      end: filtered[filtered.length - 1].idx,
+      direction: filtered[duanStart].type === 'bottom' ? 'up' : 'down'
+    });
+  }
+
+  const sigs = [];
+  zhongshu.forEach(z => {
+    let lowest = null, highest = null;
+    filtered.forEach(p => {
+      if (p.idx >= z.startIdx && p.idx <= z.endIdx) {
+        if (p.type === 'bottom' && (!lowest || p.price < lowest.price)) lowest = p;
+        if (p.type === 'top' && (!highest || p.price > highest.price)) highest = p;
+      }
+    });
+    if (lowest) sigs.push({ idx: lowest.idx, price: lowest.price, type: 'buy1', label: '\u4E00\u4E70' });
+    if (highest) sigs.push({ idx: highest.idx, price: highest.price, type: 'sell1', label: '\u4E00\u5356' });
+  });
+
+  const lastZ = zhongshu[zhongshu.length - 1];
+  if (lastZ) {
+    let afterPoints = filtered.filter(p => p.idx > lastZ.endIdx);
+    for (let i = 0; i < afterPoints.length; i++) {
+      if (afterPoints[i].type === 'bottom' && i + 2 < afterPoints.length) {
+        if (afterPoints[i].price > (afterPoints[i-1]?.price || 0)) {
+          sigs.push({ idx: afterPoints[i].idx, price: afterPoints[i].price, type: 'buy2', label: '\u4E8C\u4E70' });
+          break;
+        }
+      }
+    }
+  }
+
+  return { biPoints: filtered, duanSegments: duan, zhongshuZones: zhongshu, signals: sigs };
+}
+
+const chan = computeChanAnnotations(klineData);
+const biPoints = chan.biPoints;
+const duanSegments = chan.duanSegments;
+const zhongshuZones = chan.zhongshuZones;
+const signals = chan.signals;
+
+// ── Chart state ──
+const padding = { top: 30, right: 70, bottom: 80, left: 8 };
+let visibleCount = 80;
+let scrollPos = klineData.length - visibleCount; // FLOAT for sub-pixel smoothness
+let candleW = 6, gapW = 1;
+let crosshair = null;
+
+function clampScroll() {
+  scrollPos = Math.max(0, Math.min(klineData.length - visibleCount, scrollPos));
+}
+
+function priceToY(price, priceMin, priceMax, chartH) {
+  return padding.top + chartH - ((price - priceMin) / (priceMax - priceMin)) * chartH;
+}
+
+function idxToX(idx) {
+  return padding.left + (idx - scrollPos) * (candleW + gapW) + candleW / 2;
+}
+
+// ── Render ──
+function render() {
+  if (!W || !H) return;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const chartH = H - padding.top - padding.bottom;
+  const chartW = W - padding.left - padding.right;
+  gapW = Math.max(1, Math.round(chartW / visibleCount * 0.15));
+  candleW = Math.max(2, (chartW - gapW * (visibleCount - 1)) / visibleCount);
+
+  const si = Math.floor(scrollPos);
+  const extraRight = 2; // render 2 extra for smooth scroll
+  const visible = klineData.slice(si, si + visibleCount + extraRight);
+
+  if (!visible.length) return;
+
+  // Compute price range
+  let priceMin = Infinity, priceMax = -Infinity, volMax = 0;
+  visible.forEach(d => {
+    priceMin = Math.min(priceMin, d.low);
+    priceMax = Math.max(priceMax, d.high);
+    volMax = Math.max(volMax, d.volume);
+  });
+  const pricePad = (priceMax - priceMin) * 0.08;
+  priceMin -= pricePad;
+  priceMax += pricePad;
+
+  // ── Grid ──
+  ctx.strokeStyle = '#F0F0F0';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 5; i++) {
+    const y = padding.top + (chartH / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(W - padding.right, y);
+    ctx.stroke();
+
+    const price = priceMax - (priceMax - priceMin) * (i / 5);
+    ctx.fillStyle = '#999';
+    ctx.font = '10px ui-monospace, SF Mono, Menlo, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(price.toLocaleString('en', { maximumFractionDigits: 0 }), W - padding.right + 6, y + 3);
+  }
+
+  // ── Zhongshu zones ──
+  if (document.getElementById('showZhongshu').checked) {
+    zhongshuZones.forEach(z => {
+      const x1 = idxToX(z.startIdx) - candleW / 2;
+      const x2 = idxToX(z.endIdx) + candleW / 2;
+      const y1 = priceToY(z.highPrice, priceMin, priceMax, chartH);
+      const y2 = priceToY(z.lowPrice, priceMin, priceMax, chartH);
+
+      if (x2 < padding.left || x1 > W - padding.right) return;
+
+      ctx.fillStyle = 'rgba(234,179,8,0.08)';
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+
+      ctx.strokeStyle = 'rgba(234,179,8,0.3)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = 'rgba(180,140,0,0.6)';
+      ctx.font = '10px ui-monospace, SF Mono, Menlo, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(z.label, x1 + 4, y1 + 12);
+    });
+  }
+
+  // ── Candlesticks ──
+  visible.forEach((d, i) => {
+    const x = padding.left + (si + i - scrollPos) * (candleW + gapW);
+    if (x + candleW < padding.left || x > W - padding.right) return;
+
+    const isUp = d.close >= d.open;
+    const color = isUp ? '#17A34A' : '#DC2626';
+
+    const bodyTop = priceToY(Math.max(d.open, d.close), priceMin, priceMax, chartH);
+    const bodyBot = priceToY(Math.min(d.open, d.close), priceMin, priceMax, chartH);
+    const wickTop = priceToY(d.high, priceMin, priceMax, chartH);
+    const wickBot = priceToY(d.low, priceMin, priceMax, chartH);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + candleW / 2, wickTop);
+    ctx.lineTo(x + candleW / 2, wickBot);
+    ctx.stroke();
+
+    if (isUp) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, bodyTop + 0.5, candleW - 1, Math.max(1, bodyBot - bodyTop));
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, bodyTop, candleW, Math.max(1, bodyBot - bodyTop));
+    }
+  });
+
+  // ── Volume bars ──
+  const volH = 50;
+  const volBase = H - 10;
+  visible.forEach((d, i) => {
+    const x = padding.left + (si + i - scrollPos) * (candleW + gapW);
+    if (x + candleW < padding.left || x > W - padding.right) return;
+    const isUp = d.close >= d.open;
+    const barH = (d.volume / volMax) * volH;
+    ctx.fillStyle = isUp ? 'rgba(23,163,74,0.15)' : 'rgba(220,38,38,0.15)';
+    ctx.fillRect(x, volBase - barH, candleW, barH);
+  });
+
+  // ── MACD area ──
+  if (document.getElementById('showMACD').checked) {
+    const macdBase = H - padding.bottom + 25;
+    visible.forEach((d, i) => {
+      const x = padding.left + (si + i - scrollPos) * (candleW + gapW);
+      if (x + candleW < padding.left || x > W - padding.right) return;
+      const macd = Math.sin((si + i) * 0.08) * 20 + Math.sin((si + i) * 0.03) * 15;
+      const barH = Math.abs(macd) * 1.2;
+      ctx.fillStyle = macd >= 0 ? 'rgba(23,163,74,0.25)' : 'rgba(220,38,38,0.25)';
+      if (macd >= 0) {
+        ctx.fillRect(x, macdBase - barH, candleW, barH);
+      } else {
+        ctx.fillRect(x, macdBase, candleW, barH);
+      }
+    });
+    ctx.strokeStyle = '#E5E5E5';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, macdBase);
+    ctx.lineTo(W - padding.right, macdBase);
+    ctx.stroke();
+  }
+
+  // ── Duan segments ──
+  if (document.getElementById('showDuan').checked) {
+    duanSegments.forEach(seg => {
+      const x1 = idxToX(seg.start);
+      const x2 = idxToX(seg.end);
+      if (x2 < padding.left || x1 > W - padding.right) return;
+      const startBi = biPoints.find(p => p.idx === seg.start);
+      const endBi = biPoints.find(p => p.idx === seg.end);
+      if (!startBi || !endBi) return;
+      const y1 = priceToY(startBi.price, priceMin, priceMax, chartH);
+      const y2 = priceToY(endBi.price, priceMin, priceMax, chartH);
+
+      ctx.strokeStyle = 'rgba(139,92,246,0.6)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    });
+  }
+
+  // ── Bi segments ──
+  if (document.getElementById('showBi').checked) {
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < biPoints.length - 1; i++) {
+      const p1 = biPoints[i];
+      const p2 = biPoints[i + 1];
+      const x1 = idxToX(p1.idx);
+      const x2 = idxToX(p2.idx);
+      if (Math.max(x1, x2) < padding.left || Math.min(x1, x2) > W - padding.right) continue;
+      const y1 = priceToY(p1.price, priceMin, priceMax, chartH);
+      const y2 = priceToY(p2.price, priceMin, priceMax, chartH);
+
+      ctx.strokeStyle = '#2F6FEB';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      [p1, p2].forEach(p => {
+        const px = idxToX(p.idx);
+        if (px < padding.left || px > W - padding.right) return;
+        const py = priceToY(p.price, priceMin, priceMax, chartH);
+        ctx.fillStyle = '#2F6FEB';
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+  }
+
+  // ── Buy/Sell signals ──
+  if (document.getElementById('showSignals').checked) {
+    signals.forEach(s => {
+      const x = idxToX(s.idx);
+      if (x < padding.left || x > W - padding.right) return;
+      const isBuy = s.type.startsWith('buy');
+      const yOffset = isBuy ? 18 : -18;
+      const y = priceToY(s.price, priceMin, priceMax, chartH) + yOffset;
+
+      ctx.fillStyle = isBuy ? '#17A34A' : '#DC2626';
+      ctx.beginPath();
+      if (isBuy) {
+        ctx.moveTo(x, y - 10);
+        ctx.lineTo(x - 6, y);
+        ctx.lineTo(x + 6, y);
+      } else {
+        ctx.moveTo(x, y + 10);
+        ctx.lineTo(x - 6, y);
+        ctx.lineTo(x + 6, y);
+      }
+      ctx.fill();
+
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(s.label, x, isBuy ? y - 12 : y + 22);
+    });
+  }
+
+  // ── Last price line ──
+  const lastCandle = klineData[klineData.length - 1];
+  if (lastCandle) {
+    const lastY = priceToY(lastCandle.close, priceMin, priceMax, chartH);
+    const isUp = lastCandle.close >= lastCandle.open;
+    const lineColor = isUp ? '#17A34A' : '#DC2626';
+
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(padding.left, lastY);
+    ctx.lineTo(W - padding.right, lastY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const priceStr = lastCandle.close.toLocaleString('en', { maximumFractionDigits: 0 });
+    const tw = ctx.measureText(priceStr).width;
+    ctx.fillStyle = lineColor;
+    ctx.fillRect(W - padding.right, lastY - 8, tw + 12, 16);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px ui-monospace, SF Mono, Menlo, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(priceStr, W - padding.right + 4, lastY + 4);
+  }
+
+  // ── Time axis ──
+  const step = Math.max(1, Math.round(80 / Math.max(1, candleW)));
+  ctx.fillStyle = '#999';
+  ctx.font = '9px ui-monospace, SF Mono, Menlo, monospace';
+  ctx.textAlign = 'center';
+  for (let i = 0; i < visible.length; i += step) {
+    const x = padding.left + (si + i - scrollPos) * (candleW + gapW) + candleW / 2;
+    if (x < padding.left || x > W - padding.right) continue;
+    const d = visible[i].time;
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    const label = (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hh + ':' + mm;
+    ctx.fillText(label, x, H - padding.bottom + 14);
+  }
+
+  // ── Crosshair ──
+  if (crosshair) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(crosshair.x, padding.top);
+    ctx.lineTo(crosshair.x, H - padding.bottom);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(padding.left, crosshair.y);
+    ctx.lineTo(W - padding.right, crosshair.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Price label on Y axis
+    const price = priceMax - (crosshair.y - padding.top) / chartH * (priceMax - priceMin);
+    const priceStr = price.toLocaleString('en', { maximumFractionDigits: 0 });
+    const tw = ctx.measureText(priceStr).width;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(W - padding.right, crosshair.y - 8, tw + 12, 16);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px ui-monospace, SF Mono, Menlo, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(priceStr, W - padding.right + 4, crosshair.y + 4);
+
+    // OHLCV tooltip
+    const candleStep = candleW + gapW;
+    const hoverIdx = Math.round(scrollPos + (crosshair.x - padding.left - candleW / 2) / candleStep);
+    if (hoverIdx >= 0 && hoverIdx < klineData.length) {
+      const cd = klineData[hoverIdx];
+      const isUp = cd.close >= cd.open;
+      const cls = isUp ? 'up' : 'down';
+
+      document.getElementById('ttTime').textContent = cd.time.toLocaleString('zh-CN');
+      document.getElementById('ttOpen').textContent = cd.open.toLocaleString();
+      document.getElementById('ttOpen').className = 'tt-val ' + cls;
+      document.getElementById('ttHigh').textContent = cd.high.toLocaleString();
+      document.getElementById('ttHigh').className = 'tt-val ' + cls;
+      document.getElementById('ttLow').textContent = cd.low.toLocaleString();
+      document.getElementById('ttLow').className = 'tt-val ' + cls;
+      document.getElementById('ttClose').textContent = cd.close.toLocaleString();
+      document.getElementById('ttClose').className = 'tt-val ' + cls;
+      document.getElementById('ttVol').textContent = cd.volume.toLocaleString();
+      document.getElementById('ttVol').className = 'tt-val';
+      tooltipEl.style.display = 'block';
+    } else {
+      tooltipEl.style.display = 'none';
+    }
+  } else {
+    tooltipEl.style.display = 'none';
+  }
+}
+
+// ── Smooth Interaction ──
+
+let isDragging = false;
+let dragStartX = 0;
+let dragStartScrollPos = 0;
+let velocity = 0;
+let lastMoveX = 0;
+let lastMoveTime = 0;
+let inertiaRaf = null;
+
+canvas.style.cursor = 'crosshair';
+
+function cancelInertia() {
+  if (inertiaRaf) {
+    cancelAnimationFrame(inertiaRaf);
+    inertiaRaf = null;
+  }
+}
+
+function startInertia() {
+  if (Math.abs(velocity) < 1) return;
+  const chartW = W - padding.left - padding.right;
+
+  function step() {
+    const pixelsPerCandle = chartW / visibleCount;
+    scrollPos -= velocity / pixelsPerCandle;
+    clampScroll();
+    velocity *= 0.93;
+    if (scrollPos <= 0 || scrollPos >= klineData.length - visibleCount) {
+      velocity = 0;
+    }
+    queueRender();
+    if (Math.abs(velocity) > 0.5) {
+      inertiaRaf = requestAnimationFrame(step);
+    }
+  }
+  inertiaRaf = requestAnimationFrame(step);
+}
+
+canvas.addEventListener('mousedown', e => {
+  isDragging = true;
+  dragStartX = e.clientX;
+  dragStartScrollPos = scrollPos;
+  velocity = 0;
+  lastMoveX = e.clientX;
+  lastMoveTime = performance.now();
+  canvas.style.cursor = 'grabbing';
+  crosshair = null;
+  cancelInertia();
+});
+
+window.addEventListener('mousemove', e => {
+  if (isDragging) {
+    const dx = e.clientX - dragStartX;
+    const chartW = W - padding.left - padding.right;
+    const pixelsPerCandle = chartW / visibleCount;
+    scrollPos = dragStartScrollPos - dx / pixelsPerCandle;
+    clampScroll();
+
+    // Track velocity for inertia
+    const now = performance.now();
+    const dt = now - lastMoveTime;
+    if (dt > 0) {
+      velocity = (e.clientX - lastMoveX) / dt * 16;
+    }
+    lastMoveX = e.clientX;
+    lastMoveTime = now;
+
+    queueRender();
+  } else {
+    const rect = canvas.getBoundingClientRect();
+    if (e.clientX >= rect.left && e.clientX <= rect.right &&
+        e.clientY >= rect.top && e.clientY <= rect.bottom) {
+      crosshair = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      queueRender();
+    }
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDragging) {
+    isDragging = false;
+    canvas.style.cursor = 'crosshair';
+    startInertia();
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  if (!isDragging) {
+    crosshair = null;
+    queueRender();
+  }
+});
+
+// ── Touch drag (mobile) ──
+let touchStartX = 0;
+let touchStartScrollPos = 0;
+let lastTouchDist = 0;
+let touchZoomCenter = 0;
+
+canvas.addEventListener('touchstart', e => {
+  cancelInertia();
+  if (e.touches.length === 1) {
+    touchStartX = e.touches[0].clientX;
+    touchStartScrollPos = scrollPos;
+    velocity = 0;
+    lastMoveX = e.touches[0].clientX;
+    lastMoveTime = performance.now();
+    crosshair = null;
+  } else if (e.touches.length === 2) {
+    lastTouchDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const rect = canvas.getBoundingClientRect();
+    touchZoomCenter = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+  }
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  if (e.touches.length === 1) {
+    const dx = e.touches[0].clientX - touchStartX;
+    const chartW = W - padding.left - padding.right;
+    const pixelsPerCandle = chartW / visibleCount;
+    scrollPos = touchStartScrollPos - dx / pixelsPerCandle;
+    clampScroll();
+
+    const now = performance.now();
+    const dt = now - lastMoveTime;
+    if (dt > 0) {
+      velocity = (e.touches[0].clientX - lastMoveX) / dt * 16;
+    }
+    lastMoveX = e.touches[0].clientX;
+    lastMoveTime = now;
+
+    queueRender();
+  } else if (e.touches.length === 2) {
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const chartW = W - padding.left - padding.right;
+    const candleAtCursor = scrollPos + (touchZoomCenter - padding.left) / (chartW / visibleCount);
+
+    const zoomDelta = Math.round((dist - lastTouchDist) / 8);
+    const newCount = Math.max(30, Math.min(klineData.length, visibleCount - zoomDelta));
+
+    if (newCount !== visibleCount) {
+      visibleCount = newCount;
+      scrollPos = candleAtCursor - (touchZoomCenter - padding.left) / (chartW / visibleCount);
+      clampScroll();
+    }
+    lastTouchDist = dist;
+    queueRender();
+  }
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  if (e.touches.length === 0) {
+    startInertia();
+  }
+}, { passive: false });
+
+// ── Wheel zoom (centered on cursor) ──
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+
+  const rect = canvas.getBoundingClientRect();
+  const cursorX = e.clientX - rect.left;
+  const chartW = W - padding.left - padding.right;
+
+  // Candle index under cursor before zoom
+  const candleAtCursor = scrollPos + (cursorX - padding.left) / (chartW / visibleCount);
+
+  const step = (e.ctrlKey || e.metaKey) ? 1 : (e.deltaY > 0 ? 5 : -5);
+  const newCount = Math.max(30, Math.min(klineData.length, visibleCount + step));
+
+  if (newCount !== visibleCount) {
+    visibleCount = newCount;
+    // Keep candleAtCursor at same screen X
+    scrollPos = candleAtCursor - (cursorX - padding.left) / (chartW / visibleCount);
+    clampScroll();
+    queueRender();
+  }
+}, { passive: false });
+
+// ── Keyboard navigation ──
+window.addEventListener('keydown', e => {
+  const chartW = W - padding.left - padding.right;
+  const step = Math.max(1, Math.round(visibleCount * 0.05));
+  if (e.key === 'ArrowLeft') {
+    scrollPos -= step;
+    clampScroll();
+    queueRender();
+  } else if (e.key === 'ArrowRight') {
+    scrollPos += step;
+    clampScroll();
+    queueRender();
+  } else if (e.key === '+' || e.key === '=') {
+    visibleCount = Math.max(30, visibleCount - 10);
+    clampScroll();
+    queueRender();
+  } else if (e.key === '-') {
+    visibleCount = Math.min(klineData.length, visibleCount + 10);
+    clampScroll();
+    queueRender();
+  }
+});
+
+// Timeframe switching
+document.querySelectorAll('.tf-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    scrollPos = Math.max(0, klineData.length - 80);
+    visibleCount = 80;
+    queueRender();
+  });
+});
+
+// Tool switching
+document.querySelectorAll('.tool-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+
+// Chan Theory toggle redraw
+['showBi', 'showDuan', 'showZhongshu', 'showSignals', 'showMACD'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => queueRender());
+});
+
+// Initial render
+resize();
+</script>
+</body>
+</html>

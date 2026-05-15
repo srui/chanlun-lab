@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缠论K线 — 信号中心</title>
+<style>
+:root {
+  --bg: #F7F8FA;
+  --surface: #FFFFFF;
+  --fg: #111111;
+  --muted: #6B6B6B;
+  --border: #E5E5E5;
+  --accent: #2F6FEB;
+  --success: #17A34A;
+  --danger: #DC2626;
+  --warn: #EAB308;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--fg);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.top-nav {
+  display: flex; align-items: center; height: 48px; padding: 0 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border); gap: 8px;
+  position: sticky; top: 0; z-index: 10;
+}
+.nav-logo { font-weight: 700; font-size: 15px; color: var(--fg); margin-right: 8px; white-space: nowrap; letter-spacing: -0.02em; }
+.nav-logo span { color: var(--accent); }
+.nav-links { display: flex; gap: 2px; }
+.nav-links a { text-decoration: none; color: var(--muted); font-size: 13px; font-weight: 500; padding: 6px 10px; border-radius: var(--radius-sm); transition: all 0.15s; white-space: nowrap; }
+.nav-links a:hover { color: var(--fg); background: var(--bg); }
+.nav-links a.active { color: var(--accent); background: rgba(47,111,235,0.08); }
+
+.market-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.market-toggle button {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-body);
+}
+.market-toggle button.active {
+  background: var(--accent);
+  color: white;
+}
+
+.page-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 24px 12px; flex-wrap: wrap; gap: 12px;
+}
+.page-header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+
+/* Stats row */
+.stats-row {
+  display: flex; gap: 12px; padding: 0 24px 16px; flex-wrap: wrap;
+}
+
+.stat-card {
+  flex: 1; min-width: 140px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
+.stat-value { font-family: var(--font-mono); font-size: 24px; font-weight: 700; }
+.stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.stat-value.green { color: var(--success); }
+.stat-value.red { color: var(--danger); }
+.stat-value.yellow { color: #B8860B; }
+
+/* Filter bar */
+.filter-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 24px 12px; flex-wrap: wrap;
+}
+
+.filter-pill {
+  padding: 6px 14px; font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); border-radius: 20px; cursor: pointer;
+  transition: all 0.15s; white-space: nowrap;
+}
+.filter-pill:hover { color: var(--fg); border-color: var(--fg); }
+.filter-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+.toggle-group {
+  display: flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-left: auto;
+}
+.toggle-btn {
+  padding: 6px 14px; font-size: 12px; font-weight: 500;
+  border: none; background: var(--surface); color: var(--muted);
+  cursor: pointer; transition: all 0.15s;
+}
+.toggle-btn:hover { color: var(--fg); }
+.toggle-btn.active { background: var(--bg); color: var(--fg); font-weight: 600; }
+
+/* Signal list */
+.signal-list {
+  padding: 0 24px 24px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.signal-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: all 0.15s;
+}
+.signal-card:hover { border-color: var(--accent); box-shadow: 0 1px 4px rgba(47,111,235,0.08); }
+
+.signal-type-icon {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; flex-shrink: 0;
+}
+.signal-type-icon.buy1 { background: rgba(23,163,74,0.12); color: var(--success); }
+.signal-type-icon.buy2 { background: rgba(23,163,74,0.12); color: var(--success); }
+.signal-type-icon.buy3 { background: rgba(23,163,74,0.12); color: var(--success); }
+.signal-type-icon.sell1 { background: rgba(220,38,38,0.12); color: var(--danger); }
+.signal-type-icon.sell2 { background: rgba(220,38,38,0.12); color: var(--danger); }
+.signal-type-icon.sell3 { background: rgba(220,38,38,0.12); color: var(--danger); }
+.signal-type-icon.divergence { background: rgba(234,179,8,0.12); color: #B8860B; }
+
+.signal-main { flex: 1; min-width: 0; }
+.signal-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.signal-desc { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+
+.pair-tag {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  padding: 2px 6px; border-radius: 3px; background: var(--bg);
+}
+
+.tf-tag {
+  font-size: 11px; font-weight: 500; padding: 2px 6px;
+  border-radius: 3px; background: rgba(47,111,235,0.08); color: var(--accent);
+}
+
+.signal-meta {
+  text-align: right; flex-shrink: 0;
+}
+
+.signal-price { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+.signal-price.up { color: var(--success); }
+.signal-price.down { color: var(--danger); }
+
+.signal-time { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.signal-confidence {
+  display: flex; align-items: center; gap: 4px; margin-top: 4px; justify-content: flex-end;
+}
+.confidence-bar { width: 40px; height: 3px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.confidence-fill { height: 100%; border-radius: 2px; }
+.confidence-fill.high { background: var(--success); }
+.confidence-fill.medium { background: var(--warn); }
+.confidence-fill.low { background: var(--muted); }
+.confidence-label { font-size: 10px; color: var(--muted); }
+
+/* Responsive */
+@media (max-width: 767px) {
+  .page-header { padding: 16px; }
+  .stats-row { padding: 0 16px 12px; }
+  .filter-bar { padding: 0 16px 10px; }
+  .signal-list { padding: 0 16px 16px; }
+  .toggle-group { margin-left: 0; }
+  .stat-card { min-width: 100px; padding: 10px 12px; }
+  .stat-value { font-size: 18px; }
+  .signal-card { padding: 10px 12px; gap: 10px; }
+  .signal-desc { display: none; }
+}
+
+@media (max-width: 429px) {
+  .stats-row { gap: 8px; }
+  .stat-card { min-width: 0; flex-basis: calc(50% - 4px); }
+}
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <div class="nav-logo">缠论<span>K线</span></div>
+  <div class="market-toggle">
+    <button data-market="spot">现货</button>
+    <button data-market="futures">合约</button>
+  </div>
+  <div class="nav-links">
+    <a href="/chart">📊 图表</a>
+    <a href="/watchlist">📋 自选</a>
+    <a href="/signals" class="active">🔔 信号</a>
+    <a href="/multi-tf">📐 多周期</a>
+    <a href="/settings">⚙</a>
+  </div>
+</nav>
+
+<div class="page-header">
+  <h1>信号中心</h1>
+</div>
+
+<div class="stats-row" id="statsRow">
+  <div class="stat-card">
+    <div class="stat-label">今日买点</div>
+    <div class="stat-value green" id="statBuy">--</div>
+    <div class="stat-sub" id="statBuySub">加载中…</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">今日卖点</div>
+    <div class="stat-value red" id="statSell">--</div>
+    <div class="stat-sub" id="statSellSub">加载中…</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">背驰预警</div>
+    <div class="stat-value yellow" id="statDiv">--</div>
+    <div class="stat-sub" id="statDivSub">加载中…</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">总信号数</div>
+    <div class="stat-value" id="statTotal">--</div>
+    <div class="stat-sub">过去 24 小时</div>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <button class="filter-pill active" data-filter="all">全部</button>
+  <button class="filter-pill" data-filter="buy">买点</button>
+  <button class="filter-pill" data-filter="sell">卖点</button>
+  <button class="filter-pill" data-filter="divergence">背驰</button>
+  <div class="toggle-group">
+    <button class="toggle-btn active" data-view="active">实时</button>
+    <button class="toggle-btn" data-view="history">历史</button>
+  </div>
+</div>
+
+<div class="signal-list" id="signalList"></div>
+
+<script>
+const DEFAULT_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','LINKUSDT'];
+
+let currentMarketType = localStorage.getItem('chanlun_market_type') || 'spot';
+function getSymbolList() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('chanlun_watchlist'));
+    if (Array.isArray(saved) && saved.length > 0) return saved;
+  } catch(e) {}
+  return DEFAULT_SYMBOLS;
+}
+const SYMBOLS = getSymbolList();
+
+const LABEL_MAP = {
+  buy1: '一买', buy2: '二买', buy3: '三买',
+  sell1: '一卖', sell2: '二卖', sell3: '三卖'
+};
+
+const STATE_LABELS = {
+  CONFIRMING: '预警',
+  READY: '已触发'
+};
+
+const TYPE_DESC_TEMPLATES = {
+  buy1: '中枢下方出现底分型，MACD 绿柱缩短，一买信号{state}。',
+  buy2: '回调不破前低，中枢上沿获得支撑，二买{state}。',
+  buy3: '突破中枢后回踩上沿获支撑，三买形成{state}。',
+  sell1: 'MACD 面积减小，标准顶背驰形态，一卖{state}。',
+  sell2: '反弹不破前高，上涨力度减弱，二卖{state}。',
+  sell3: '跌破中枢下沿后反弹受阻，三卖{state}。'
+};
+
+let signals = [];
+let currentFilter = 'all';
+
+const list = document.getElementById('signalList');
+
+function formatPair(symbol) {
+  return symbol.replace('USDT', '/USDT');
+}
+
+function formatPrice(price) {
+  if (price == null) return '--';
+  return Number(price).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+}
+
+function buildSignalsFromAPI(symbol, data) {
+  const result = [];
+  if (!data || !data.signal) return result;
+
+  const sig = data.signal;
+  const activeSetup = sig.activeSetup;
+  const pair = formatPair(symbol);
+
+  if (activeSetup && (sig.state === 'READY' || sig.state === 'CONFIRMING')) {
+    const typeKey = activeSetup.type + activeSetup.label;
+    const isBuy = activeSetup.type === 'buy';
+    const stateLabel = STATE_LABELS[sig.state] || sig.state;
+    const confidence = sig.state === 'READY' ? 'high' : 'medium';
+    const descTemplate = TYPE_DESC_TEMPLATES[typeKey] || `${LABEL_MAP[typeKey] || typeKey} 信号{state}。`;
+    const desc = descTemplate.replace('{state}', stateLabel);
+
+    result.push({
+      pair: pair,
+      tf: '4H',
+      type: typeKey,
+      label: `${LABEL_MAP[typeKey] || typeKey} · ${stateLabel}`,
+      desc: desc,
+      price: activeSetup.price,
+      time: '刚刚',
+      confidence: confidence,
+      change: isBuy ? 'up' : 'down'
+    });
+
+    if (activeSetup.hasDivergence) {
+      const divType = isBuy ? '底背驰' : '顶背驰';
+      result.push({
+        pair: pair,
+        tf: '4H',
+        type: 'divergence',
+        label: `${divType}预警`,
+        desc: `${pair} 4H 级别${divType}结构确认，MACD 力度减弱，注意${isBuy ? '买点' : '卖点'}形成。`,
+        price: activeSetup.price,
+        time: '刚刚',
+        confidence: confidence,
+        change: isBuy ? 'up' : 'down'
+      });
+    }
+  }
+
+  return result;
+}
+
+function updateStats() {
+  const buySignals = signals.filter(s => s.type.startsWith('buy'));
+  const sellSignals = signals.filter(s => s.type.startsWith('sell'));
+  const divSignals = signals.filter(s => s.type === 'divergence');
+
+  const buyReady = buySignals.filter(s => s.confidence === 'high').length;
+  const buyWatching = buySignals.filter(s => s.confidence !== 'high').length;
+  const sellReady = sellSignals.filter(s => s.confidence === 'high').length;
+  const sellWatching = sellSignals.filter(s => s.confidence !== 'high').length;
+  const topDiv = divSignals.filter(s => s.change === 'down').length;
+  const botDiv = divSignals.filter(s => s.change === 'up').length;
+
+  document.getElementById('statBuy').textContent = buySignals.length;
+  document.getElementById('statBuySub').textContent = `${buyReady} 已触发 · ${buyWatching} 预警`;
+
+  document.getElementById('statSell').textContent = sellSignals.length;
+  document.getElementById('statSellSub').textContent = `${sellReady} 已触发 · ${sellWatching} 预警`;
+
+  document.getElementById('statDiv').textContent = divSignals.length;
+  document.getElementById('statDivSub').textContent = `${topDiv} 顶背驰 · ${botDiv} 底背驰`;
+
+  document.getElementById('statTotal').textContent = signals.length;
+}
+
+function renderSignals(filter) {
+  list.innerHTML = '';
+  currentFilter = filter;
+
+  let filtered;
+  if (filter === 'all') {
+    filtered = signals;
+  } else if (filter === 'buy') {
+    filtered = signals.filter(s => s.type.startsWith('buy'));
+  } else if (filter === 'sell') {
+    filtered = signals.filter(s => s.type.startsWith('sell'));
+  } else if (filter === 'divergence') {
+    filtered = signals.filter(s => s.type === 'divergence');
+  } else {
+    filtered = signals;
+  }
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div style="text-align:center;padding:40px 0;color:var(--muted);font-size:14px;">暂无信号数据</div>';
+    return;
+  }
+
+  filtered.forEach(s => {
+    const isBuy = s.type.startsWith('buy');
+    const isDiv = s.type === 'divergence';
+    const typeLabel = s.type === 'buy1' ? '1' : s.type === 'buy2' ? '2' : s.type === 'buy3' ? '3'
+                    : s.type === 'sell1' ? '1' : s.type === 'sell2' ? '2' : s.type === 'sell3' ? '3' : '⚡';
+    const iconSymbol = isDiv ? '⚡' : typeLabel;
+
+    const card = document.createElement('div');
+    card.className = 'signal-card';
+    card.dataset.type = s.type;
+    card.innerHTML = `
+      <div class="signal-type-icon ${s.type}">${iconSymbol}</div>
+      <div class="signal-main">
+        <div class="signal-title">
+          ${s.label}
+          <span class="pair-tag">${s.pair}</span>
+          <span class="tf-tag">${s.tf}</span>
+        </div>
+        <div class="signal-desc">${s.desc}</div>
+      </div>
+      <div class="signal-meta">
+        <div class="signal-price ${s.change}">${formatPrice(s.price)}</div>
+        <div class="signal-time">${s.time}</div>
+        <div class="signal-confidence">
+          <span class="confidence-label">${s.confidence === 'high' ? '高' : s.confidence === 'medium' ? '中' : '低'}</span>
+          <div class="confidence-bar"><div class="confidence-fill ${s.confidence}" style="width:${s.confidence === 'high' ? '90' : s.confidence === 'medium' ? '60' : '35'}%"></div></div>
+        </div>
+      </div>
+    `;
+    card.addEventListener('click', () => window.location.href = '/chart');
+    list.appendChild(card);
+  });
+}
+
+async function fetchSignals() {
+  list.innerHTML = '<div style="text-align:center;padding:40px 0;color:var(--muted);font-size:14px;">加载中…</div>';
+
+  const promises = SYMBOLS.map(symbol =>
+    fetch('/api/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, interval: '4h', limit: 300, marketType: currentMarketType })
+    })
+    .then(res => res.ok ? res.json() : null)
+    .then(data => buildSignalsFromAPI(symbol, data))
+    .catch(() => [])
+  );
+
+  const results = await Promise.all(promises);
+  signals = results.flat();
+
+  updateStats();
+  renderSignals(currentFilter);
+}
+
+// Market type toggle
+document.querySelectorAll('.market-toggle button').forEach(btn => {
+  if (btn.dataset.market === currentMarketType) btn.classList.add('active');
+  else btn.classList.remove('active');
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.market-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMarketType = btn.dataset.market;
+    localStorage.setItem('chanlun_market_type', currentMarketType);
+    fetchSignals();
+  });
+});
+
+fetchSignals();
+
+document.querySelectorAll('.filter-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    renderSignals(pill.dataset.filter);
+  });
+});
+
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+</script>
+</body>
+</html>

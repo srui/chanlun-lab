@@ -53,15 +53,12 @@ const S = {
   higherDrawStart: null,
   drawStrokeMode: false,
   strokeDrawLastIdx: null,
-  klineViewStart: 0,
-  klineViewEnd: 0,
-  isPanning: false,
-  panStartX: 0,
-  panViewStart: 0,
-  panViewEnd: 0,
   autoRefresh: false,
   autoRefreshTimer: null,
   lastSignalState: null,
+  loadingOlder: false,
+  oldestKlineTime: null,
+  macdOffset: 0,
 };
 
 // ====== UI Helpers ======
@@ -74,8 +71,6 @@ function resetPrimary() {
   S.primary.buySellPoints = [];
   S.primary.macd = null;
   S.primary.divergencePoints = [];
-  S.klineViewStart = 0;
-  S.klineViewEnd = 0;
   S.drawStart = null;
   S.zsDrawStart = null;
   S.segZsDrawStart = null;
@@ -120,6 +115,8 @@ function resetAll() {
   S.currentSymbol = null;
   S.primaryInterval = null;
   S.contextInterval = null;
+  S.oldestKlineTime = null;
+  S.loadingOlder = false;
   S.context = { klines: null, fractals: null, turningPoints: [], segments: [], zhongshu: [], interval: null };
   resetPrimary();
 }
@@ -136,10 +133,23 @@ function getMinKlineGap() {
 }
 
 // ====== API Calls ======
+
+// 周期 → 分钟数映射
+const INTERVAL_MINUTES = {
+  '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+  '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480,
+  '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200,
+};
+
+function getDaysKlineCount(interval, days = 60) {
+  const mins = INTERVAL_MINUTES[interval] || 60;
+  return Math.ceil(days * 1440 / mins);
+}
+
 async function loadBinanceKlines() {
   const symbol = document.getElementById('binanceSymbol').value.trim().toUpperCase();
   const interval = document.getElementById('binanceInterval').value;
-  const limit = parseInt(document.getElementById('binanceCount').value) || 200;
+  const limit = 500;
   if (!symbol) { alert('请输入交易对'); return; }
 
   const statusEl = document.getElementById('binanceStatus');
@@ -176,6 +186,8 @@ async function loadBinanceKlines() {
 
     // 在 resetPrimary 之后存入数据
     S.primary.klines = primary.klines;
+    S.oldestKlineTime = primary.klines.length ? primary.klines[0].openTime : null;
+    S.loadingOlder = false;
     S.currentSymbol = primary.symbol;
     S.primaryInterval = primary.interval;
     S.primary.fractals = primary.fractals || [];
@@ -214,6 +226,79 @@ async function loadBinanceKlines() {
   } catch (err) {
     statusEl.textContent = '错误: ' + err.message;
     statusEl.style.color = '#ff6b6b';
+  }
+}
+
+async function loadOlderKlines() {
+  if (S.loadingOlder || !S.primary.klines || !S.oldestKlineTime) return;
+  S.loadingOlder = true;
+  drawChart(); // show loading indicator
+
+  try {
+    const symbol = S.currentSymbol;
+    const interval = S.primaryInterval;
+    const resp = await fetch(`/api/klines/older?symbol=${encodeURIComponent(symbol)}&interval=${interval}&beforeTime=${S.oldestKlineTime}&count=500`);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '未知错误');
+
+    const olderKlines = data.klines;
+    if (!olderKlines || olderKlines.length === 0) {
+      S.loadingOlder = false;
+      return; // no more data
+    }
+
+    // Prepend older klines
+    S.primary.klines = olderKlines.concat(S.primary.klines);
+    S.oldestKlineTime = olderKlines[0].openTime;
+
+    // Re-analyze the full expanded kline array
+    const analyzeResp = await fetch('/api/compute/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        klines: S.primary.klines,
+        minKlineGap: getMinKlineGap(),
+        minSegmentRatio: getMinSegmentRatio(),
+      })
+    });
+    const analysis = await analyzeResp.json();
+    if (!analyzeResp.ok) throw new Error(analysis.error || '分析失败');
+
+    // Replace all analysis state with new results
+    S.primary.fractals = analysis.fractals || [];
+    S.primary.turningPoints = analysis.turningPoints || [];
+    S.primary.strokes = analysis.strokes || [];
+    S.primary.segments = analysis.segments || [];
+    S.primary.zhongshuList = analysis.zhongshu || [];
+    S.primary.segmentZhongshu = analysis.segmentZhongshu || [];
+    S.primary.higherSegments = analysis.higherSegments || [];
+    S.primary.buySellPoints = analysis.buySellPoints || [];
+    S.primary.macd = analysis.macd || null;
+    S.primary.divergencePoints = analysis.divergences || [];
+    S.macdOffset = 0;
+    S.deletedTurningPoints = new Set();
+
+    // Re-render
+    renderStrokeList();
+    renderSegList();
+    renderZhongshuList();
+    renderSegZsList();
+    renderHigherList();
+    renderBsList();
+    drawChart();
+    autoSaveAnnotation();
+
+    const statusEl = document.getElementById('binanceStatus');
+    statusEl.textContent = `${symbol} ${interval} · ${S.primary.klines.length} K线 · ${S.primary.turningPoints.length} 转折点`;
+    statusEl.style.color = '';
+  } catch (err) {
+    console.error('加载历史数据失败:', err);
+    const statusEl = document.getElementById('binanceStatus');
+    statusEl.textContent = '加载历史失败: ' + err.message;
+    statusEl.style.color = '#ff6b6b';
+  } finally {
+    S.loadingOlder = false;
+    drawChart();
   }
 }
 
@@ -1027,8 +1112,6 @@ function clearAll() {
   S.primary.buySellPoints = [];
   S.primary.macd = null;
   S.primary.divergencePoints = [];
-  S.klineViewStart = 0;
-  S.klineViewEnd = 0;
   S.primary.klines = null;
   S.currentSymbol = null;
   S.primaryInterval = null;
@@ -1120,9 +1203,19 @@ function renderZhongshuList() {
   });
 }
 
-// ====== SVG Drawing ======
+
+// ====== SVG Drawing + Lightweight Charts ======
 const SVG_NS = "http://www.w3.org/2000/svg";
 const chart = document.getElementById('chart');
+
+// LC instances
+let lcChart = null;
+let lcCandleSeries = null;
+let lcVolumeSeries = null;
+let lcMacdHistSeries = null;
+let lcDifSeries = null;
+let lcDeaSeries = null;
+let lcOverlayScheduled = false;
 
 function svgEl(tag, attrs) {
   const e = document.createElementNS(SVG_NS, tag);
@@ -1135,135 +1228,157 @@ function clearSVG() {
   S.chartCoords = [];
 }
 
-function drawChart() {
-  if (S.primary.turningPoints.length < 2) return;
-  clearSVG();
-  const rect = chart.parentElement.getBoundingClientRect();
-  const W = rect.width, H = rect.height;
-  chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
+// ====== LC Init / Data ======
+function initLC() {
+  if (lcChart) lcChart.remove();
+  const container = document.getElementById('lcContainer');
+  lcChart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#1a1a2e' }, textColor: '#5577aa', fontSize: 11 },
+    grid: { vertLines: { color: '#1e3050' }, horzLines: { color: '#1e3050' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: '#1a3a5c' },
+    timeScale: { borderColor: '#1a3a5c', timeVisible: true, secondsVisible: false },
+  });
 
-  const klineMode = !!S.primary.klines && S.primary.klines.length > 0;
-  const left = 80, right = 60, top = 30;
+  lcCandleSeries = lcChart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  });
 
-  // Split into price area + MACD area
-  const macdH = klineMode ? Math.max(100, H * 0.22) : 0;
-  const macdGap = klineMode ? 20 : 0;  // gap between panels
-  const priceH = H - top - 30 - macdH - macdGap;
-  const macdTop = top + priceH + macdGap;
-  const cW = W - left - right;
+  lcVolumeSeries = lcChart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'volume',
+  });
+  lcChart.priceScale('volume').applyOptions({
+    scaleMargins: { top: 0.85, bottom: 0 },
+  });
 
-  // === Price range ===
-  let minP, maxP;
-  let visStart = 0, visEnd = 0, visibleKlines = S.primary.klines;
-  if (klineMode) {
-    const totalKlines = S.primary.klines.length;
-    if (S.klineViewEnd > S.klineViewStart) {
-      visStart = Math.max(0, Math.floor(S.klineViewStart));
-      visEnd = Math.min(totalKlines, Math.ceil(S.klineViewEnd));
-    } else {
-      visStart = 0;
-      visEnd = totalKlines;
+  // MACD pane
+  lcMacdHistSeries = lcChart.addHistogramSeries({ pane: 1, priceScaleId: 'macd_hist' });
+  lcDifSeries = lcChart.addLineSeries({ pane: 1, color: '#2196f3', lineWidth: 1, priceScaleId: 'macd_hist' });
+  lcDeaSeries = lcChart.addLineSeries({ pane: 1, color: '#ff9800', lineWidth: 1, priceScaleId: 'macd_hist' });
+
+  lcChart.timeScale().subscribeVisibleLogicalRangeChange(onLCVisibleRangeChange);
+}
+
+function updateLCData() {
+  if (!lcChart || !S.primary.klines) return;
+  const candleData = S.primary.klines.map(k => ({
+    time: Math.round(k.openTime / 1000),
+    open: k.open, high: k.high, low: k.low, close: k.close,
+  }));
+  lcCandleSeries.setData(candleData);
+
+  const volumeData = S.primary.klines.map(k => ({
+    time: Math.round(k.openTime / 1000),
+    value: k.volume || 0,
+    color: k.close >= k.open ? 'rgba(38,166,154,0.3)' : 'rgba(239,83,80,0.3)',
+  }));
+  lcVolumeSeries.setData(volumeData);
+
+  if (S.primary.macd) {
+    const { dif, dea, histogram } = S.primary.macd;
+    const offset = S.macdOffset;
+    const histData = [], difData = [], deaData = [];
+    for (let i = 0; i < dif.length; i++) {
+      const kIdx = i + offset;
+      if (kIdx < 0 || kIdx >= S.primary.klines.length) continue;
+      const t = Math.round(S.primary.klines[kIdx].openTime / 1000);
+      histData.push({ time: t, value: histogram[i], color: histogram[i] >= 0 ? '#26a69a' : '#ef5350' });
+      difData.push({ time: t, value: dif[i] });
+      deaData.push({ time: t, value: dea[i] });
     }
-    visibleKlines = S.primary.klines.slice(visStart, visEnd);
-    if (S.showKlines) {
-      minP = Math.min(...visibleKlines.map(k => k.low), ...S.primary.turningPoints);
-      maxP = Math.max(...visibleKlines.map(k => k.high), ...S.primary.turningPoints);
-    } else {
-      minP = Math.min(...S.primary.turningPoints);
-      maxP = Math.max(...S.primary.turningPoints);
+    lcMacdHistSeries.setData(histData);
+    lcDifSeries.setData(difData);
+    lcDeaSeries.setData(deaData);
+  } else {
+    lcMacdHistSeries.setData([]);
+    lcDifSeries.setData([]);
+    lcDeaSeries.setData([]);
+  }
+}
+
+// ====== Coordinate Bridge ======
+function tpToLCPoint(tpIdx) {
+  if (!lcCandleSeries || !S.primary.fractals) return null;
+  const price = S.primary.turningPoints[tpIdx];
+  if (tpIdx >= S.primary.fractals.length) return null;
+  const klineIdx = S.primary.fractals[tpIdx].klineIdx;
+  if (klineIdx === undefined || klineIdx >= S.primary.klines.length) return null;
+  const lcTime = Math.round(S.primary.klines[klineIdx].openTime / 1000);
+  const x = lcCandleSeries.timeToCoordinate(lcTime);
+  const y = lcCandleSeries.priceToCoordinate(price);
+  if (x === null || y === null) return null;
+  return { x, y, price };
+}
+
+function rebuildChartCoords() {
+  S.chartCoords = S.primary.turningPoints.map((p, i) => {
+    if (S.primary.klines && S.primary.klines.length > 0) {
+      const pt = tpToLCPoint(i);
+      if (pt) return pt;
     }
-  } else {
-    minP = Math.min(...S.primary.turningPoints);
-    maxP = Math.max(...S.primary.turningPoints);
+    return { x: -1000, y: -1000, price: p };
+  });
+}
+
+function lcPriceToY(price) {
+  if (!lcCandleSeries) return null;
+  return lcCandleSeries.priceToCoordinate(price);
+}
+
+function lcTimeToX(timestamp) {
+  if (!lcCandleSeries) return null;
+  return lcCandleSeries.timeToCoordinate(Math.round(timestamp / 1000));
+}
+
+// ====== Viewport change handler ======
+function onLCVisibleRangeChange(range) {
+  if (!range) return;
+  // Left edge detection
+  if (range.from < 20 && !S.loadingOlder && S.primary.klines) {
+    loadOlderKlines();
   }
-  const padding = (maxP - minP) * 0.06 || 5;
-  const rangeMin = minP - padding;
-  const rangeMax = maxP + padding;
-  const range = rangeMax - rangeMin;
-  const yScale = priceH / range;
-  const toY = p => top + priceH - (p - rangeMin) * yScale;
-
-  // === X-axis ===
-  let toX, tpKlineIdx = null, klineBarW = 0, timeMin = 0, timeRange = 1;
-  if (klineMode) {
-    timeMin = visibleKlines[0].openTime;
-    const timeMax = visibleKlines[visibleKlines.length - 1].closeTime;
-    timeRange = timeMax - timeMin || 1;
-    const timeToX = t => left + (t - timeMin) / timeRange * cW;
-    // Build tpKlineIdx: map turning point index -> kline index
-    tpKlineIdx = S.primary.fractals ? S.primary.fractals.map(f => f.klineIdx) : [];
-    toX = i => {
-      if (tpKlineIdx && i < tpKlineIdx.length && tpKlineIdx[i] < S.primary.klines.length) {
-        return timeToX(S.primary.klines[tpKlineIdx[i]].openTime);
-      }
-      return left + i * (cW / Math.max(S.primary.turningPoints.length - 1, 1));
-    };
-    // Bar width from typical kline interval
-    const interval = S.primary.klines.length > 1 ? S.primary.klines[1].openTime - S.primary.klines[0].openTime : 60000;
-    klineBarW = Math.max(1, (interval / timeRange) * cW * 0.8);
-  } else {
-    const gap = cW / (S.primary.turningPoints.length - 1);
-    toX = i => left + i * gap;
-  }
-
-  // Store layout for other functions
-  S.chartLayout = {
-    top, left, right, cW,
-    priceH, priceBottom: top + priceH,
-    macdTop, macdH, macdBottom: macdTop + macdH,
-    minP: rangeMin, maxP: rangeMax, yScale,
-    klineMode, W, H,
-    timeMin, timeRange, klineBarW, tpKlineIdx,
-    visStart, visEnd, totalKlines: S.primary.klines ? S.primary.klines.length : 0
-  };
-  S.chartCoords = S.primary.turningPoints.map((p, i) => ({ x: toX(i), y: toY(p), price: p }));
-
-  // === Price grid ===
-  const dataRange = maxP - minP;
-  const rawStep = dataRange / 8;
-  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-  let step;
-  if (rawStep / mag < 2) step = 2 * mag;
-  else if (rawStep / mag < 5) step = 5 * mag;
-  else step = 10 * mag;
-  const gridStart = Math.floor(rangeMin / step) * step;
-  for (let p = gridStart; p <= rangeMax; p += step) {
-    const y = toY(p);
-    chart.appendChild(svgEl("line", { x1: left - 5, y1: y, x2: left + cW + 5, y2: y, stroke: "#1e3050", "stroke-width": 0.5, "stroke-dasharray": "3,3" }));
-    const lbl = svgEl("text", { x: left - 10, y: y + 4, fill: "#5577aa", "font-size": 11, "text-anchor": "end", "font-family": "SF Mono,Menlo,monospace" });
-    lbl.textContent = Math.round(p * 100) / 100;
-    chart.appendChild(lbl);
-  }
-
-  // === K-line candlesticks ===
-  if (klineMode && S.showKlines) {
-    const timeToX = t => left + (t - timeMin) / timeRange * cW;
-    visibleKlines.forEach((k, idx) => {
-      const cx = timeToX(k.openTime);
-      const yH = toY(k.high), yL = toY(k.low);
-      const yO = toY(k.open), yC = toY(k.close);
-      const bull = k.close >= k.open;
-      const color = bull ? "#26a69a" : "#ef5350";
-      const bodyTop = Math.min(yO, yC), bodyH = Math.max(Math.abs(yO - yC), 1);
-      // Wick
-      chart.appendChild(svgEl("line", { x1: cx, y1: yH, x2: cx, y2: yL, stroke: color, "stroke-width": 1 }));
-      // Body
-      chart.appendChild(svgEl("rect", {
-        x: cx - klineBarW / 2, y: bodyTop, width: klineBarW, height: bodyH,
-        fill: bull ? color : color, stroke: color, "stroke-width": 0.5, opacity: 0.9
-      }));
+  // Schedule overlay redraw
+  if (!lcOverlayScheduled) {
+    lcOverlayScheduled = true;
+    requestAnimationFrame(() => {
+      lcOverlayScheduled = false;
+      drawOverlay();
     });
   }
+}
 
-  // === MACD panel ===
+// ====== Main drawChart ======
+function drawChart() {
+  if (S.primary.turningPoints.length < 2 && !S.primary.klines) return;
+  const klineMode = !!S.primary.klines && S.primary.klines.length > 0;
+
   if (klineMode) {
-    drawMACDPanel(macdTop, macdH, left, cW);
+    if (!lcChart) initLC();
+    updateLCData();
+    // drawOverlay will be triggered by LC's viewport change callback
+    // but also call it directly for immediate render
+    requestAnimationFrame(() => drawOverlay());
+  } else {
+    // Non-kline mode: pure SVG rendering
+    drawOverlayPure();
   }
+}
 
-  // === Context period overlays ===
-  if (klineMode && S.showContext && S.context.interval && S.context.klines && S.context.klines.length > 0) {
-    const ctxTimeToX = t => left + (t - timeMin) / timeRange * cW;
-    // Build context tp index → klineIdx map from fractals
+// ====== SVG Overlay (kline mode) ======
+function drawOverlay() {
+  if (S.primary.turningPoints.length < 2) return;
+  clearSVG();
+  const klineMode = !!S.primary.klines && S.primary.klines.length > 0;
+  if (!klineMode) { drawOverlayPure(); return; }
+
+  rebuildChartCoords();
+  S.chartLayout = { klineMode: true };
+
+  // Context period overlays
+  if (S.showContext && S.context.interval && S.context.klines && S.context.klines.length > 0) {
     const ctxFractals = S.context.fractals;
     const ctxTpTime = (idx) => {
       if (ctxFractals && idx < ctxFractals.length) {
@@ -1272,102 +1387,84 @@ function drawChart() {
       }
       return null;
     };
-    // Render context zhongshu (behind context segments)
     S.context.zhongshu.forEach(zs => {
       const tFrom = ctxTpTime(zs.fromIdx);
       const tTo = ctxTpTime(zs.toIdx);
       if (tFrom === null || tTo === null) return;
-      const x1 = ctxTimeToX(tFrom), x2 = ctxTimeToX(tTo);
-      const zgY = toY(zs.zg), zdY = toY(zs.zd);
-      if (x1 > left + cW || x2 < left) return; // clip
+      const x1 = lcTimeToX(tFrom), x2 = lcTimeToX(tTo);
+      const zgY = lcPriceToY(zs.zg), zdY = lcPriceToY(zs.zd);
+      if (x1 === null || x2 === null || zgY === null || zdY === null) return;
       chart.appendChild(svgEl("rect", {
         x: x1 - 2, y: zgY, width: x2 - x1 + 4, height: zdY - zgY,
         fill: "rgba(230,119,0,0.08)", stroke: "rgba(230,119,0,0.3)", "stroke-width": 2,
         rx: 3, class: "ctx-zs-rect"
       }));
     });
-    // Render context segments
     S.context.segments.forEach(seg => {
       const tFrom = ctxTpTime(seg.fromIdx);
       const tTo = ctxTpTime(seg.toIdx);
       if (tFrom === null || tTo === null) return;
-      const x1 = ctxTimeToX(tFrom), x2 = ctxTimeToX(tTo);
-      if (x1 > left + cW || x2 < left) return; // clip
+      const x1 = lcTimeToX(tFrom), x2 = lcTimeToX(tTo);
+      if (x1 === null || x2 === null) return;
       const pFrom = S.context.turningPoints[seg.fromIdx];
       const pTo = S.context.turningPoints[seg.toIdx];
+      const y1 = lcPriceToY(pFrom), y2 = lcPriceToY(pTo);
+      if (y1 === null || y2 === null) return;
       const isUp = pTo > pFrom;
       chart.appendChild(svgEl("line", {
-        x1, y1: toY(pFrom), x2, y2: toY(pTo),
+        x1, y1, x2, y2,
         stroke: isUp ? "rgba(47,158,68,0.5)" : "rgba(201,42,42,0.5)",
         "stroke-width": 4, "stroke-linecap": "round", class: "ctx-seg-line"
       }));
     });
   }
 
-  // === Overlays ===
-  // 中枢 rectangles (behind segments)
+  // Zhongshu + Segment zhongshu
   drawZhongshuRectangles();
   if (S.showSegZs) drawSegmentZhongshuRects();
 
   // Segments
   S.primary.segments.forEach((seg, i) => drawSegmentLine(seg.fromIdx, seg.toIdx, i));
 
-  // Zigzag strokes — draw only strokes that exist in the strokes array
+  // Zigzag strokes
   if (S.primary.strokes.length >= 1) {
-    const strokeColor = klineMode ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.85)";
-    const strokeWidth = klineMode ? 1 : 0.8;
-    S.primary.strokes.forEach((s, si) => {
+    S.primary.strokes.forEach((s) => {
       if (s.fromIdx === null || s.fromIdx === undefined) return;
-      const x1 = toX(s.fromIdx), y1 = toY(S.primary.turningPoints[s.fromIdx]);
-      const x2 = toX(s.toIdx), y2 = toY(S.primary.turningPoints[s.toIdx]);
+      const from = S.chartCoords[s.fromIdx], to = S.chartCoords[s.toIdx];
+      if (!from || !to || from.x < 0 || to.x < 0) return;
       const hidden = S.deletedTurningPoints.has(s.fromIdx) || S.deletedTurningPoints.has(s.toIdx);
       if (!hidden) {
         chart.appendChild(svgEl("line", {
-          x1, y1, x2, y2,
-          stroke: strokeColor, "stroke-width": strokeWidth,
+          x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+          stroke: "rgba(255,255,255,0.7)", "stroke-width": 1,
           "stroke-linecap": "round"
         }));
       }
-      // Hit area always present
       chart.appendChild(svgEl("line", {
-        x1, y1, x2, y2,
+        x1: from.x, y1: from.y, x2: to.x, y2: to.y,
         stroke: "transparent", "stroke-width": 14,
         class: "stroke-hit", "data-stroke-idx": s.toIdx,
         style: hidden ? "cursor:default" : "cursor:pointer"
       }));
     });
   }
-  // Turning point dots — skip deleted
+
+  // Turning point dots
   S.primary.turningPoints.forEach((p, i) => {
     if (S.deletedTurningPoints.has(i)) return;
-    const x = toX(i), y = toY(p);
+    const c = S.chartCoords[i];
+    if (!c || c.x < 0) return;
 
-    // Visual dots — always show
-    if (klineMode) {
-      // Kline mode: colored dots — green for bottom, red for top
-      const isTop = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] > S.primary.turningPoints[i-1] && S.primary.turningPoints[i] > S.primary.turningPoints[i+1];
-      const isBottom = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] < S.primary.turningPoints[i-1] && S.primary.turningPoints[i] < S.primary.turningPoints[i+1];
-      const dotColor = isTop ? "#ff6b6b" : isBottom ? "#51cf66" : "#00e5ff";
-      chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 5, fill: dotColor, stroke: "#fff", "stroke-width": 1, class: "tp-dot", "data-idx": i, style: "cursor:pointer" }));
-      // Price label
-      const ly = isTop ? y - 10 : isBottom ? y + 16 : y - 10;
-      const lbl = svgEl("text", { x, y: ly, fill: dotColor, "font-size": 10, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace", class: "tp-label", "data-idx": i });
-      lbl.textContent = Math.round(p * 100) / 100;
-      chart.appendChild(lbl);
-    } else {
-      chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 7, fill: "none", stroke: "rgba(255,255,255,0.2)", "stroke-width": 1, opacity: 0.25 }));
-      chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 5, fill: "#16213e", stroke: "rgba(255,255,255,0.85)", "stroke-width": 1.5, class: "tp-dot", "data-idx": i, style: "cursor:grab" }));
-      const isPeak = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] > S.primary.turningPoints[i-1] && S.primary.turningPoints[i] > S.primary.turningPoints[i+1];
-      const isValley = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] < S.primary.turningPoints[i-1] && S.primary.turningPoints[i] < S.primary.turningPoints[i+1];
-      let ly = isPeak ? y - 14 : isValley ? y + 20 : (i === 0 ? y - 14 : y + 20);
-      const lbl = svgEl("text", { x, y: ly, fill: "#99aabb", "font-size": 12, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace", class: "tp-label", "data-idx": i });
-      lbl.textContent = Math.round(p * 100) / 100;
-      chart.appendChild(lbl);
-    }
-
-    // Hit area for click interaction — always render
-    const hitCursor = klineMode ? "pointer" : "grab";
-    const hitCircle = svgEl("circle", { cx: x, cy: y, r: klineMode ? 10 : 18, fill: "transparent", stroke: "none", class: "tp-hit", "data-idx": i, style: `cursor:${hitCursor}` });
+    const isTop = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] > S.primary.turningPoints[i-1] && S.primary.turningPoints[i] > S.primary.turningPoints[i+1];
+    const isBottom = i > 0 && i < S.primary.turningPoints.length - 1 && S.primary.turningPoints[i] < S.primary.turningPoints[i-1] && S.primary.turningPoints[i] < S.primary.turningPoints[i+1];
+    const dotColor = isTop ? "#ff6b6b" : isBottom ? "#51cf66" : "#00e5ff";
+    chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 5, fill: dotColor, stroke: "#fff", "stroke-width": 1, class: "tp-dot", "data-idx": i, style: "cursor:pointer" }));
+    const ly = isTop ? c.y - 10 : isBottom ? c.y + 16 : c.y - 10;
+    const lbl = svgEl("text", { x: c.x, y: ly, fill: dotColor, "font-size": 10, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace", class: "tp-label", "data-idx": i });
+    lbl.textContent = Math.round(p * 100) / 100;
+    chart.appendChild(lbl);
+    // Hit area
+    const hitCircle = svgEl("circle", { cx: c.x, cy: c.y, r: 10, fill: "transparent", stroke: "none", class: "tp-hit", "data-idx": i, style: "cursor:pointer" });
     const tipEl = svgEl("title", {});
     tipEl.textContent = Math.round(p * 100) / 100;
     hitCircle.appendChild(tipEl);
@@ -1377,144 +1474,121 @@ function drawChart() {
   // Buy/sell markers
   if (S.showBuySell) drawBuySellMarkers();
 
-  // Higher-level segments (red dashed)
+  // Higher-level segments
   drawHigherSegmentLines();
 
-  // Time labels (kline mode)
-  if (klineMode) {
-    const timeToX = t => left + (t - timeMin) / timeRange * cW;
-    const labelY = H - 8;
-    const step2 = Math.max(1, Math.floor(visibleKlines.length / 10));
-    for (let vi = 0; vi < visibleKlines.length; vi += step2) {
-      const k = visibleKlines[vi];
-      const x = timeToX(k.openTime);
-      const dt = new Date(k.openTime);
-      const txt = S.primaryInterval && (S.primaryInterval.includes('d') || S.primaryInterval === '1w' || S.primaryInterval === '1M')
-        ? `${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getDate().toString().padStart(2,'0')}`
-        : `${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
-      const lbl = svgEl("text", { x, y: labelY, fill: "#5577aa", "font-size": 10, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace" });
-      lbl.textContent = txt;
-      chart.appendChild(lbl);
-    }
-  }
-
-  if (klineMode) initCrosshair();
-}
-
-function drawMACDPanel(macdTop, macdH, left, cW) {
-  // Use backend-provided MACD data
-  if (!S.primary.macd) return;
-  const { dif, dea, histogram } = S.primary.macd;
-
-  const visStart = S.chartLayout.visStart;
-  const visEnd = S.chartLayout.visEnd;
-
-  // Visible slice of MACD data
-  const visDif = dif.slice(visStart, visEnd);
-  const visDea = dea.slice(visStart, visEnd);
-  const visHist = histogram.slice(visStart, visEnd);
-
-  // Panel background
-  chart.appendChild(svgEl("rect", { x: left, y: macdTop, width: cW, height: macdH, fill: "rgba(10,20,40,0.5)", stroke: "#1e3050", "stroke-width": 0.5, rx: 3 }));
-
-  // Label
-  const label = svgEl("text", { x: left + 6, y: macdTop + 14, fill: "#5577aa", "font-size": 10, "font-family": "SF Mono,Menlo,monospace" });
-  label.textContent = "MACD (12,26,9)";
-  chart.appendChild(label);
-
-  // MACD Y scale (from visible data only)
-  const maxAbs = Math.max(0.001, Math.max(...visHist.map(Math.abs)), Math.max(...visDif.map(Math.abs)), Math.max(...visDea.map(Math.abs)));
-  const macdYScale = (macdH - 24) / (2 * maxAbs);
-  const zeroY = macdTop + macdH / 2;
-  const toMY = v => zeroY - v * macdYScale;
-
-  // Zero line
-  chart.appendChild(svgEl("line", { x1: left, y1: zeroY, x2: left + cW, y2: zeroY, stroke: "#334466", "stroke-width": 0.5, "stroke-dasharray": "4,3" }));
-
-  // Time-to-X helper
-  const timeToX = t => left + (t - S.chartLayout.timeMin) / S.chartLayout.timeRange * cW;
-  const barW = Math.max(1, S.chartLayout.klineBarW * 0.6);
-
-  // Histogram bars (visible only)
-  visHist.forEach((v, vi) => {
-    const kIdx = visStart + vi;
-    const x = timeToX(S.primary.klines[kIdx].openTime);
-    const y = toMY(v);
-    const h = Math.abs(y - zeroY);
-    const prevV = vi > 0 ? visHist[vi - 1] : v;
-    const color = v >= 0 ? (vi > 0 && v < prevV ? "#66bb6a" : "#26a69a") : (vi > 0 && v > prevV ? "#ef9a9a" : "#ef5350");
-    chart.appendChild(svgEl("rect", {
-      x: x - barW / 2, y: Math.min(y, zeroY), width: barW, height: Math.max(h, 0.5),
-      fill: color, opacity: 0.8
-    }));
-  });
-
-  // DIF line (visible only)
-  let dDif = "";
-  visDif.forEach((v, vi) => {
-    const kIdx = visStart + vi;
-    const x = timeToX(S.primary.klines[kIdx].openTime);
-    const y = toMY(v);
-    dDif += (vi === 0 ? "M" : "L") + ` ${x} ${y}`;
-  });
-  if (dDif) chart.appendChild(svgEl("path", { d: dDif, fill: "none", stroke: "#2196f3", "stroke-width": 1.2 }));
-
-  // DEA line (visible only)
-  let dDea = "";
-  visDea.forEach((v, vi) => {
-    const kIdx = visStart + vi;
-    const x = timeToX(S.primary.klines[kIdx].openTime);
-    const y = toMY(v);
-    dDea += (vi === 0 ? "M" : "L") + ` ${x} ${y}`;
-  });
-  if (dDea) chart.appendChild(svgEl("path", { d: dDea, fill: "none", stroke: "#ff9800", "stroke-width": 1.2 }));
-
-  // Divergence lines on MACD
-  if (S.primary.divergencePoints.length) {
+  // Divergence lines on MACD pane
+  if (S.primary.divergencePoints.length && lcDifSeries) {
     S.primary.divergencePoints.forEach(div => {
-      const kIdx1 = div.compareKlineIdx;
-      const kIdx2 = div.klineIdx;
-      // Only draw if both points are in visible range
-      if (kIdx1 < visStart || kIdx1 >= visEnd || kIdx2 < visStart || kIdx2 >= visEnd) return;
-
-      const x1 = timeToX(S.primary.klines[kIdx1].openTime);
-      const y1 = toMY(dif[kIdx1]);
-      const x2 = timeToX(S.primary.klines[kIdx2].openTime);
-      const y2 = toMY(dif[kIdx2]);
+      const k1 = S.primary.klines[div.compareKlineIdx];
+      const k2 = S.primary.klines[div.klineIdx];
+      if (!k1 || !k2) return;
+      const x1 = lcDifSeries.timeToCoordinate(Math.round(k1.openTime / 1000));
+      const x2 = lcDifSeries.timeToCoordinate(Math.round(k2.openTime / 1000));
+      const y1 = lcDifSeries.priceToCoordinate(S.primary.macd.dif[div.compareKlineIdx - S.macdOffset]);
+      const y2 = lcDifSeries.priceToCoordinate(S.primary.macd.dif[div.klineIdx - S.macdOffset]);
+      if (x1 === null || x2 === null || y1 === null || y2 === null) return;
       const isTop = div.type === 'top';
       const color = isTop ? "#ff1744" : "#00c853";
-
-      // Divergence line on DIF
-      chart.appendChild(svgEl("line", {
-        x1, y1, x2, y2, stroke: color, "stroke-width": 1.5, opacity: 0.9, class: "div-line"
-      }));
-      // Dots at both ends
+      chart.appendChild(svgEl("line", { x1, y1, x2, y2, stroke: color, "stroke-width": 1.5, opacity: 0.9, class: "div-line" }));
       chart.appendChild(svgEl("circle", { cx: x1, cy: y1, r: 3, fill: color, opacity: 0.9, class: "div-line" }));
       chart.appendChild(svgEl("circle", { cx: x2, cy: y2, r: 3, fill: color, opacity: 0.9, class: "div-line" }));
-      // Label
       const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
       const tag = isTop ? "顶背驰" : "底背驰";
-      const bg = svgEl("rect", {
-        x: midX - 22, y: midY - 16, width: 44, height: 16, rx: 3,
-        fill: color, opacity: 0.85, class: "div-line"
-      });
+      const bg = svgEl("rect", { x: midX - 22, y: midY - 16, width: 44, height: 16, rx: 3, fill: color, opacity: 0.85, class: "div-line" });
       chart.appendChild(bg);
-      const txt = svgEl("text", {
-        x: midX, y: midY - 6, fill: "#fff", "font-size": 10, "font-weight": "bold",
-        "text-anchor": "middle", class: "div-line"
-      });
+      const txt = svgEl("text", { x: midX, y: midY - 6, fill: "#fff", "font-size": 10, "font-weight": "bold", "text-anchor": "middle", class: "div-line" });
       txt.textContent = tag;
       chart.appendChild(txt);
     });
   }
 
-  // Separator line above MACD
-  chart.appendChild(svgEl("line", { x1: left, y1: macdTop - 1, x2: left + cW, y2: macdTop - 1, stroke: "#2a3a5a", "stroke-width": 1 }));
+  // Loading indicator
+  if (S.loadingOlder) {
+    const indicator = svgEl("text", { x: 8, y: 20, fill: "#ffc832", "font-size": 12, "font-family": "SF Mono,Menlo,monospace", class: "loading-older-indicator" });
+    indicator.textContent = "加载历史数据...";
+    chart.appendChild(indicator);
+  }
 }
 
+// ====== Pure SVG Overlay (non-kline mode) ======
+function drawOverlayPure() {
+  if (S.primary.turningPoints.length < 2) return;
+  clearSVG();
+  const rect = chart.parentElement.getBoundingClientRect();
+  const W = rect.width, H = rect.height;
+  chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const left = 80, right = 60, top = 30, cW = W - left - right;
+  const priceH = H - top - 30;
+  const minP = Math.min(...S.primary.turningPoints);
+  const maxP = Math.max(...S.primary.turningPoints);
+  const padding = (maxP - minP) * 0.06 || 5;
+  const rangeMin = minP - padding, rangeMax = maxP + padding;
+  const yScale = priceH / (rangeMax - rangeMin);
+  const toY = p => top + priceH - (p - rangeMin) * yScale;
+  const gap = cW / (S.primary.turningPoints.length - 1);
+  const toX = i => left + i * gap;
+
+  S.chartLayout = { top, left, cW, priceH, priceBottom: top + priceH, minP: rangeMin, maxP: rangeMax, yScale, klineMode: false, W, H };
+  S.chartCoords = S.primary.turningPoints.map((p, i) => ({ x: toX(i), y: toY(p), price: p }));
+
+  // Grid
+  const dataRange = maxP - minP;
+  const rawStep = dataRange / 8;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  let step = rawStep / mag < 2 ? 2 * mag : rawStep / mag < 5 ? 5 * mag : 10 * mag;
+  const gridStart = Math.floor(rangeMin / step) * step;
+  for (let p = gridStart; p <= rangeMax; p += step) {
+    const y = toY(p);
+    chart.appendChild(svgEl("line", { x1: left - 5, y1: y, x2: left + cW + 5, y2: y, stroke: "#1e3050", "stroke-width": 0.5, "stroke-dasharray": "3,3" }));
+    const lbl = svgEl("text", { x: left - 10, y: y + 4, fill: "#5577aa", "font-size": 11, "text-anchor": "end", "font-family": "SF Mono,Menlo,monospace" });
+    lbl.textContent = Math.round(p * 100) / 100;
+    chart.appendChild(lbl);
+  }
+
+  drawZhongshuRectangles();
+  if (S.showSegZs) drawSegmentZhongshuRects();
+  S.primary.segments.forEach((seg, i) => drawSegmentLine(seg.fromIdx, seg.toIdx, i));
+
+  // Strokes
+  if (S.primary.strokes.length >= 1) {
+    S.primary.strokes.forEach(s => {
+      if (s.fromIdx === null || s.fromIdx === undefined) return;
+      const hidden = S.deletedTurningPoints.has(s.fromIdx) || S.deletedTurningPoints.has(s.toIdx);
+      if (!hidden) {
+        chart.appendChild(svgEl("line", { x1: toX(s.fromIdx), y1: toY(S.primary.turningPoints[s.fromIdx]), x2: toX(s.toIdx), y2: toY(S.primary.turningPoints[s.toIdx]), stroke: "rgba(255,255,255,0.85)", "stroke-width": 0.8, "stroke-linecap": "round" }));
+      }
+      chart.appendChild(svgEl("line", { x1: toX(s.fromIdx), y1: toY(S.primary.turningPoints[s.fromIdx]), x2: toX(s.toIdx), y2: toY(S.primary.turningPoints[s.toIdx]), stroke: "transparent", "stroke-width": 14, class: "stroke-hit", "data-stroke-idx": s.toIdx, style: hidden ? "cursor:default" : "cursor:pointer" }));
+    });
+  }
+
+  // Turning point dots
+  S.primary.turningPoints.forEach((p, i) => {
+    if (S.deletedTurningPoints.has(i)) return;
+    const x = toX(i), y = toY(p);
+    chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 7, fill: "none", stroke: "rgba(255,255,255,0.2)", "stroke-width": 1, opacity: 0.25 }));
+    chart.appendChild(svgEl("circle", { cx: x, cy: y, r: 5, fill: "#16213e", stroke: "rgba(255,255,255,0.85)", "stroke-width": 1.5, class: "tp-dot", "data-idx": i, style: "cursor:grab" }));
+    const isPeak = i > 0 && i < S.primary.turningPoints.length - 1 && p > S.primary.turningPoints[i-1] && p > S.primary.turningPoints[i+1];
+    const isValley = i > 0 && i < S.primary.turningPoints.length - 1 && p < S.primary.turningPoints[i-1] && p < S.primary.turningPoints[i+1];
+    const ly = isPeak ? y - 14 : isValley ? y + 20 : (i === 0 ? y - 14 : y + 20);
+    const lbl = svgEl("text", { x, y: ly, fill: "#99aabb", "font-size": 12, "text-anchor": "middle", "font-family": "SF Mono,Menlo,monospace", class: "tp-label", "data-idx": i });
+    lbl.textContent = Math.round(p * 100) / 100;
+    chart.appendChild(lbl);
+    const hitCircle = svgEl("circle", { cx: x, cy: y, r: 18, fill: "transparent", stroke: "none", class: "tp-hit", "data-idx": i, style: "cursor:grab" });
+    const tipEl = svgEl("title", {});
+    tipEl.textContent = Math.round(p * 100) / 100;
+    hitCircle.appendChild(tipEl);
+    chart.appendChild(hitCircle);
+  });
+
+  if (S.showBuySell) drawBuySellMarkers();
+  drawHigherSegmentLines();
+}
+
+// ====== Helper render functions ======
 function drawSegmentLine(fromIdx, toIdx, segIdx) {
   const from = S.chartCoords[fromIdx], to = S.chartCoords[toIdx];
-  if (!from || !to) return;
+  if (!from || !to || from.x < 0 || to.x < 0) return;
   chart.appendChild(svgEl("line", {
     x1: from.x, y1: from.y, x2: to.x, y2: to.y,
     stroke: "transparent", "stroke-width": 12,
@@ -1553,15 +1627,20 @@ function bindSegHover() {
 }
 
 function drawZhongshuRectangles() {
-  if (!S.chartLayout || S.chartCoords.length === 0) return;
+  if (S.chartCoords.length === 0) return;
   S.primary.zhongshuList.forEach((zs, i) => {
     const from = S.chartCoords[zs.fromIdx];
     const to = S.chartCoords[zs.toIdx];
-    if (!from || !to) return;
-
-    const zgY = S.chartLayout.priceBottom - (zs.zg - S.chartLayout.minP) * S.chartLayout.yScale;
-    const zdY = S.chartLayout.priceBottom - (zs.zd - S.chartLayout.minP) * S.chartLayout.yScale;
-
+    if (!from || !to || from.x < 0 || to.x < 0) return;
+    let zgY, zdY;
+    if (S.chartLayout.klineMode && lcCandleSeries) {
+      zgY = lcPriceToY(zs.zg);
+      zdY = lcPriceToY(zs.zd);
+    } else {
+      zgY = S.chartLayout.priceBottom - (zs.zg - S.chartLayout.minP) * S.chartLayout.yScale;
+      zdY = S.chartLayout.priceBottom - (zs.zd - S.chartLayout.minP) * S.chartLayout.yScale;
+    }
+    if (zgY === null || zdY === null) return;
     chart.appendChild(svgEl("rect", {
       x: from.x - 2, y: zgY, width: to.x - from.x + 4, height: zdY - zgY,
       fill: "rgba(255,255,255,0.12)", stroke: "rgba(255,255,255,0.6)", "stroke-width": 1,
@@ -1573,15 +1652,20 @@ function drawZhongshuRectangles() {
 }
 
 function drawSegmentZhongshuRects() {
-  if (!S.chartLayout || S.chartCoords.length === 0) return;
+  if (S.chartCoords.length === 0) return;
   S.primary.segmentZhongshu.forEach((zs, i) => {
     const from = S.chartCoords[zs.fromIdx];
     const to = S.chartCoords[zs.toIdx];
-    if (!from || !to) return;
-
-    const zgY = S.chartLayout.priceBottom - (zs.zg - S.chartLayout.minP) * S.chartLayout.yScale;
-    const zdY = S.chartLayout.priceBottom - (zs.zd - S.chartLayout.minP) * S.chartLayout.yScale;
-
+    if (!from || !to || from.x < 0 || to.x < 0) return;
+    let zgY, zdY;
+    if (S.chartLayout.klineMode && lcCandleSeries) {
+      zgY = lcPriceToY(zs.zg);
+      zdY = lcPriceToY(zs.zd);
+    } else {
+      zgY = S.chartLayout.priceBottom - (zs.zg - S.chartLayout.minP) * S.chartLayout.yScale;
+      zdY = S.chartLayout.priceBottom - (zs.zd - S.chartLayout.minP) * S.chartLayout.yScale;
+    }
+    if (zgY === null || zdY === null) return;
     chart.appendChild(svgEl("rect", {
       x: from.x - 2, y: zgY, width: to.x - from.x + 4, height: zdY - zgY,
       fill: "rgba(74,158,255,0.08)", stroke: "rgba(74,158,255,0.6)", "stroke-width": 1.2,
@@ -1593,11 +1677,11 @@ function drawSegmentZhongshuRects() {
 }
 
 function drawHigherSegmentLines() {
-  if (!S.chartLayout || S.chartCoords.length === 0) return;
+  if (S.chartCoords.length === 0) return;
   S.primary.higherSegments.forEach((seg, i) => {
     const from = S.chartCoords[seg.fromIdx];
     const to = S.chartCoords[seg.toIdx];
-    if (!from || !to) return;
+    if (!from || !to || from.x < 0 || to.x < 0) return;
     chart.appendChild(svgEl("line", {
       x1: from.x, y1: from.y, x2: to.x, y2: to.y,
       stroke: "transparent", "stroke-width": 12,
@@ -1620,6 +1704,10 @@ function redrawZhongshu() {
 }
 
 // ====== Interaction ======
+function setSVGPointerEvents(enabled) {
+  chart.style.pointerEvents = enabled ? 'auto' : 'none';
+}
+
 function setSegHitEvents(enabled) {
   chart.querySelectorAll('.seg-hit, .zs-rect, .seg-zs-rect, .higher-hit, .stroke-hit').forEach(el => {
     el.style.pointerEvents = enabled ? '' : 'none';
@@ -1640,11 +1728,13 @@ function toggleDraw() {
     hint.textContent = '画段模式：点击起点 → 点击终点';
     hint.style.display = 'block';
     setSegHitEvents(false);
+    setSVGPointerEvents(true);
   } else {
     btn.textContent = '手动画段';
     hint.style.display = 'none';
     chart.querySelectorAll('.tp-highlight').forEach(el => el.remove());
     setSegHitEvents(true);
+    setSVGPointerEvents(false);
   }
 }
 
@@ -1662,11 +1752,13 @@ function toggleDrawZhongshu() {
     hint.textContent = '画中枢模式：点击起点 → 点击终点';
     hint.style.display = 'block';
     setSegHitEvents(false);
+    setSVGPointerEvents(true);
   } else {
     btn.textContent = '手动画中枢';
     hint.style.display = 'none';
     chart.querySelectorAll('.tp-highlight').forEach(el => el.remove());
     setSegHitEvents(true);
+    setSVGPointerEvents(false);
   }
 }
 
@@ -1684,11 +1776,13 @@ function toggleDrawSegZs() {
     hint.textContent = '画段中枢模式：点击起点 → 点击终点';
     hint.style.display = 'block';
     setSegHitEvents(false);
+    setSVGPointerEvents(true);
   } else {
     btn.textContent = '手动画';
     hint.style.display = 'none';
     chart.querySelectorAll('.tp-highlight').forEach(el => el.remove());
     setSegHitEvents(true);
+    setSVGPointerEvents(false);
   }
 }
 
@@ -1706,11 +1800,13 @@ function toggleDrawHigher() {
     hint.textContent = '画段的段模式：点击起点 → 点击终点';
     hint.style.display = 'block';
     setSegHitEvents(false);
+    setSVGPointerEvents(true);
   } else {
     btn.textContent = '手动画';
     hint.style.display = 'none';
     chart.querySelectorAll('.tp-highlight').forEach(el => el.remove());
     setSegHitEvents(true);
+    setSVGPointerEvents(false);
   }
 }
 
@@ -1744,28 +1840,29 @@ function removeHigher(i) {
   document.getElementById('undoHigherBtn').disabled = S.primary.higherSegments.length === 0;
 }
 
-function findSnapPoint(pt) {
-  if (!S.primary.klines || !S.chartLayout) return null;
-  const timeToX = t => S.chartLayout.left + (t - S.chartLayout.timeMin) / S.chartLayout.timeRange * S.chartLayout.cW;
-  const visStart = S.chartLayout.visStart || 0;
-  const visEnd = S.chartLayout.visEnd || S.primary.klines.length;
+function findSnapPoint(clientX, clientY) {
+  if (!S.primary.klines || !lcCandleSeries) return null;
   let bestDist = Infinity, bestIdx = 0, useHigh = true;
-  for (let ki = visStart; ki < visEnd; ki++) {
+  for (let ki = 0; ki < S.primary.klines.length; ki++) {
     const k = S.primary.klines[ki];
-    const x = timeToX(k.openTime);
-    const dx = Math.abs(pt.x - x);
+    const t = Math.round(k.openTime / 1000);
+    const x = lcCandleSeries.timeToCoordinate(t);
+    if (x === null) continue;
+    const dx = Math.abs(clientX - x);
     if (dx < bestDist) {
       bestDist = dx;
       bestIdx = ki;
-      const toY = p => S.chartLayout.priceBottom - (p - S.chartLayout.minP) * S.chartLayout.yScale;
-      const dyHigh = Math.abs(pt.y - toY(k.high));
-      const dyLow = Math.abs(pt.y - toY(k.low));
-      useHigh = dyHigh < dyLow;
+      const yH = lcCandleSeries.priceToCoordinate(k.high);
+      const yL = lcCandleSeries.priceToCoordinate(k.low);
+      if (yH !== null && yL !== null) useHigh = Math.abs(clientY - yH) < Math.abs(clientY - yL);
     }
   }
   const k = S.primary.klines[bestIdx];
   const price = useHigh ? k.high : k.low;
-  return { x: timeToX(k.openTime), y: S.chartLayout.priceBottom - (price - S.chartLayout.minP) * S.chartLayout.yScale, price, klineIdx: bestIdx, useHigh };
+  const x = lcCandleSeries.timeToCoordinate(Math.round(k.openTime / 1000));
+  const y = lcCandleSeries.priceToCoordinate(price);
+  if (x === null || y === null) return null;
+  return { x, y, price, klineIdx: bestIdx, useHigh };
 }
 
 function toggleDrawStroke() {
@@ -1781,14 +1878,15 @@ function toggleDrawStroke() {
     btn.textContent = '停止手动画';
     hint.textContent = '画笔模式：点击图表，吸附最近K线的顶或底';
     hint.style.display = 'block';
-    hideCrosshair();
     chart.querySelectorAll('.snap-preview').forEach(el => el.remove());
     setSegHitEvents(false);
+    setSVGPointerEvents(true);
   } else {
     btn.textContent = '手动画笔';
     hint.style.display = 'none';
     chart.querySelectorAll('.tp-highlight, .snap-preview').forEach(el => el.remove());
     setSegHitEvents(true);
+    setSVGPointerEvents(false);
   }
 }
 
@@ -1808,11 +1906,11 @@ function undoStrokeDraw() {
   drawChartAndSave();
 }
 
+// ====== Click handler ======
 chart.addEventListener('click', function(e) {
-  if (S.isDragging || S.isDraggingZs || S.isPanning) return;
+  if (S.isDragging || S.isDraggingZs) return;
   const noDrawMode = !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && !S.drawStrokeMode;
 
-  // Click on stroke line to delete line + both endpoint turning points, no reconnection
   const strokeHit = e.target.closest('.stroke-hit');
   if (strokeHit && noDrawMode) {
     const idx = parseInt(strokeHit.getAttribute('data-stroke-idx'));
@@ -1824,7 +1922,6 @@ chart.addEventListener('click', function(e) {
     return;
   }
 
-  // Click on turning point to delete it (non-draw mode)
   const tpHit = e.target.closest('.tp-dot, .tp-hit');
   if (tpHit && noDrawMode) {
     const idx = parseInt(tpHit.getAttribute('data-idx'));
@@ -1880,22 +1977,13 @@ chart.addEventListener('click', function(e) {
     return;
   }
 
-  // Manual stroke drawing — click on chart, snap to nearest kline high/low
+  // Manual stroke drawing
   if (S.drawStrokeMode) {
-    const pt = svgPoint(e);
-    if (!pt || !S.chartLayout) return;
-    if (pt.x < S.chartLayout.left || pt.x > S.chartLayout.left + S.chartLayout.cW) return;
-    if (pt.y < S.chartLayout.top || pt.y > S.chartLayout.priceBottom) return;
-
-    let price, snapKlineIdx = null;
-    if (S.primary.klines) {
-      const snap = findSnapPoint(pt);
-      if (!snap) return;
-      price = snap.price;
-      snapKlineIdx = snap.klineIdx;
-    } else {
-      price = parseFloat(yToPrice(pt.y).toFixed(2));
-    }
+    if (!S.primary.klines || !lcCandleSeries) return;
+    const snap = findSnapPoint(e.clientX, e.clientY);
+    if (!snap) return;
+    const price = snap.price;
+    const snapKlineIdx = snap.klineIdx;
 
     let dir;
     const isManualFirst = S.strokeDrawLastIdx === null;
@@ -1907,8 +1995,7 @@ chart.addEventListener('click', function(e) {
     }
 
     S.primary.turningPoints.push(price);
-    if (S.primary.klines && snapKlineIdx !== null && snapKlineIdx < S.primary.klines.length) {
-      if (!S.primary.fractals) S.primary.fractals = [];
+    if (S.primary.fractals && snapKlineIdx !== null && snapKlineIdx < S.primary.klines.length) {
       S.primary.fractals.push({ klineIdx: snapKlineIdx, type: dir === 'up' ? 'top' : 'bottom', price, time: S.primary.klines[snapKlineIdx].openTime });
     }
     if (!isManualFirst) {
@@ -1930,7 +2017,7 @@ chart.addEventListener('click', function(e) {
     if (S.drawStart === null) {
       S.drawStart = idx;
       const c = S.chartCoords[idx];
-      chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
+      if (c) chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
     } else {
       if (idx === S.drawStart) return;
       S.primary.segments.push({ fromIdx: S.drawStart, toIdx: idx });
@@ -1943,7 +2030,7 @@ chart.addEventListener('click', function(e) {
     if (S.zsDrawStart === null) {
       S.zsDrawStart = idx;
       const c = S.chartCoords[idx];
-      chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
+      if (c) chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
     } else {
       if (idx === S.zsDrawStart) return;
       const fromIdx = Math.min(S.zsDrawStart, idx);
@@ -1966,7 +2053,7 @@ chart.addEventListener('click', function(e) {
     if (S.segZsDrawStart === null) {
       S.segZsDrawStart = idx;
       const c = S.chartCoords[idx];
-      chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
+      if (c) chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
     } else {
       if (idx === S.segZsDrawStart) return;
       const fromIdx = Math.min(S.segZsDrawStart, idx);
@@ -1984,8 +2071,7 @@ chart.addEventListener('click', function(e) {
           S.primary.segmentZhongshu.push({
             fromIdx: inRangeSegs[0].fromIdx,
             toIdx: inRangeSegs[inRangeSegs.length - 1].toIdx,
-            zg: minHigh,
-            zd: maxLow
+            zg: minHigh, zd: maxLow
           });
           document.getElementById('undoSegZsBtn').disabled = false;
         }
@@ -1999,7 +2085,7 @@ chart.addEventListener('click', function(e) {
     if (S.higherDrawStart === null) {
       S.higherDrawStart = idx;
       const c = S.chartCoords[idx];
-      chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
+      if (c) chart.appendChild(svgEl("circle", { cx: c.x, cy: c.y, r: 14, fill: "none", stroke: "#ffc832", "stroke-width": 2, opacity: 0.6, class: "tp-highlight" }));
     } else {
       if (idx === S.higherDrawStart) return;
       S.primary.higherSegments.push({ fromIdx: S.higherDrawStart, toIdx: idx });
@@ -2044,24 +2130,18 @@ function removeZhongshu(i) {
   document.getElementById('undoZsBtn').disabled = S.primary.zhongshuList.length === 0;
 }
 
-// ====== Drag ======
-function svgPoint(evt) {
-  const pt = chart.createSVGPoint();
-  pt.x = evt.clientX;
-  pt.y = evt.clientY;
-  const ctm = chart.getScreenCTM();
-  if (!ctm) return null;
-  return pt.matrixTransform(ctm.inverse());
-}
-
+// ====== Drag (turning point + zhongshu edge) ======
 function yToPrice(y) {
-  if (!S.chartLayout) return 0;
-  return S.chartLayout.minP + (S.chartLayout.priceBottom - y) / S.chartLayout.yScale;
+  if (S.chartLayout && !S.chartLayout.klineMode) {
+    return S.chartLayout.minP + (S.chartLayout.priceBottom - y) / S.chartLayout.yScale;
+  }
+  if (lcCandleSeries) return lcCandleSeries.coordinateToPrice(y);
+  return 0;
 }
 
 chart.addEventListener('mousedown', function(e) {
   const tpTarget = e.target.closest('.tp-hit, .tp-dot');
-  if (tpTarget && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && !S.primary.klines) {
+  if (tpTarget && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode) {
     const idx = parseInt(tpTarget.getAttribute('data-idx'));
     if (isNaN(idx)) return;
     S.isDragging = true;
@@ -2073,75 +2153,46 @@ chart.addEventListener('mousedown', function(e) {
   }
 
   const zsRect = e.target.closest('.zs-rect');
-  if (zsRect && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && S.chartLayout) {
+  if (zsRect && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode) {
     const zsIdx = parseInt(zsRect.getAttribute('data-zs-idx'));
     if (!isNaN(zsIdx) && zsIdx < S.primary.zhongshuList.length) {
-      const pt = svgPoint(e);
-      if (pt) {
-        const zs = S.primary.zhongshuList[zsIdx];
-        const zgY = S.chartLayout.priceBottom - (zs.zg - S.chartLayout.minP) * S.chartLayout.yScale;
-        const zdY = S.chartLayout.priceBottom - (zs.zd - S.chartLayout.minP) * S.chartLayout.yScale;
-        if (Math.abs(pt.y - zgY) < 15) {
+      const zs = S.primary.zhongshuList[zsIdx];
+      const zgY = lcPriceToY(zs.zg);
+      const zdY = lcPriceToY(zs.zd);
+      if (zgY !== null && zdY !== null) {
+        if (Math.abs(e.clientY - zgY) < 15) {
           S.isDraggingZs = true; S.zsDragIdx = zsIdx; S.zsDragEdge = 'top';
           e.preventDefault(); return;
-        } else if (Math.abs(pt.y - zdY) < 15) {
+        } else if (Math.abs(e.clientY - zdY) < 15) {
           S.isDraggingZs = true; S.zsDragIdx = zsIdx; S.zsDragEdge = 'bottom';
           e.preventDefault(); return;
         }
       }
     }
   }
-
-  // Pan: click-drag on empty space in kline mode
-  if (S.primary.klines && S.chartLayout && S.chartLayout.klineMode &&
-      !S.isDragging && !S.isDraggingZs && !S.drawingMode && !S.drawZsMode && !S.drawSegZsMode && !S.drawHigherMode && !S.drawStrokeMode) {
-    const pt = svgPoint(e);
-    if (pt && pt.x >= S.chartLayout.left && pt.x <= S.chartLayout.left + S.chartLayout.cW &&
-        pt.y >= S.chartLayout.top && pt.y <= S.chartLayout.macdBottom) {
-      S.isPanning = true;
-      S.panStartX = e.clientX;
-      const totalKlines = S.primary.klines.length;
-      if (S.klineViewEnd <= S.klineViewStart) {
-        S.panViewStart = 0;
-        S.panViewEnd = totalKlines;
-      } else {
-        S.panViewStart = S.klineViewStart;
-        S.panViewEnd = S.klineViewEnd;
-      }
-      e.preventDefault();
-      chart.style.cursor = 'grabbing';
-    }
-  }
 });
 
 document.addEventListener('mousemove', function(e) {
   if (S.isDragging && S.dragIdx >= 0) {
-    const pt = svgPoint(e);
-    if (!pt) return;
-    const yMin = S.chartLayout.top, yMax = S.chartLayout.priceBottom;
-    const clampedY = Math.max(yMin, Math.min(yMax, pt.y));
-    const rawPrice = yToPrice(clampedY);
+    const price = yToPrice(e.clientY);
+    if (!price) return;
+    const clampedY = lcCandleSeries ? lcCandleSeries.priceToCoordinate(price) : e.clientY;
+    if (clampedY === null) return;
     chart.querySelectorAll(`[data-idx="${S.dragIdx}"].tp-dot`).forEach(d => d.setAttribute('cy', clampedY));
     chart.querySelectorAll(`[data-idx="${S.dragIdx}"].tp-hit`).forEach(h => h.setAttribute('cy', clampedY));
     const label = chart.querySelector(`[data-idx="${S.dragIdx}"].tp-label`);
     if (label) {
-      label.textContent = Math.round(rawPrice * 100) / 100;
+      label.textContent = Math.round(price * 100) / 100;
       const prices = S.primary.turningPoints, i = S.dragIdx;
       const isPeak = i > 0 && i < prices.length - 1 && prices[i] > prices[i-1] && prices[i] > prices[i+1];
-      const isValley = i > 0 && i < prices.length - 1 && prices[i] < prices[i-1] && prices[i] < prices[i+1];
-      const ly = isPeak ? clampedY - 14 : isValley ? clampedY + 20 : (i === 0 ? clampedY - 14 : clampedY + 20);
+      const ly = isPeak ? clampedY - 14 : clampedY + 20;
       label.setAttribute('y', ly);
     }
-    updateZigzagPath(S.dragIdx, clampedY);
     return;
   }
 
-  if (S.isDraggingZs && S.zsDragIdx >= 0 && S.chartLayout) {
-    const pt = svgPoint(e);
-    if (!pt) return;
-    const yMin = S.chartLayout.top, yMax = S.chartLayout.priceBottom;
-    const clampedY = Math.max(yMin, Math.min(yMax, pt.y));
-    const price = Math.round(yToPrice(clampedY) * 100) / 100;
+  if (S.isDraggingZs && S.zsDragIdx >= 0) {
+    const price = Math.round(yToPrice(e.clientY) * 100) / 100;
     const zs = S.primary.zhongshuList[S.zsDragIdx];
     if (S.zsDragEdge === 'top') {
       zs.zg = Math.max(price, zs.zd + 0.01);
@@ -2152,31 +2203,11 @@ document.addEventListener('mousemove', function(e) {
     renderZhongshuList();
     return;
   }
-
-  // Panning — right edge anchored, only move start
-  if (S.isPanning && S.chartLayout) {
-    const dx = e.clientX - S.panStartX;
-    const klinesPerPx = (S.panViewEnd - S.panViewStart) / S.chartLayout.cW;
-    const shift = -dx * klinesPerPx;
-    let newStart = S.panViewStart + shift;
-    newStart = Math.max(0, Math.min(S.panViewEnd - 10, newStart));
-    S.klineViewStart = newStart;
-    S.klineViewEnd = S.panViewEnd; // right edge stays fixed
-    drawChart();
-  }
 });
 
 document.addEventListener('mouseup', function(e) {
   if (S.isDragging && S.dragIdx >= 0) {
-    const pt = svgPoint(e);
-    let newPrice;
-    if (pt) {
-      const yMin = S.chartLayout.top, yMax = S.chartLayout.priceBottom;
-      const clampedY = Math.max(yMin, Math.min(yMax, pt.y));
-      newPrice = Math.round(yToPrice(clampedY) * 100) / 100;
-    } else {
-      newPrice = S.primary.turningPoints[S.dragIdx];
-    }
+    const newPrice = Math.round(yToPrice(e.clientY) * 100) / 100;
     S.primary.turningPoints[S.dragIdx] = newPrice;
     if (S.dragIdx < S.primary.strokes.length) {
       S.primary.strokes[S.dragIdx].val = newPrice;
@@ -2195,22 +2226,17 @@ document.addEventListener('mouseup', function(e) {
     drawChart();
     return;
   }
-
-  if (S.isPanning) {
-    S.isPanning = false;
-    chart.style.cursor = '';
-  }
 });
 
 function updateZigzagPath(changedIdx, newY) {
+  // For non-kline mode only
+  if (!S.chartLayout || S.chartLayout.klineMode) return;
   const path = chart.querySelector('path:not(.seg-line)');
-  if (!path || !S.chartLayout) return;
-
+  if (!path) return;
   const prices = S.primary.turningPoints;
   const toY = p => S.chartLayout.priceBottom - (p - S.chartLayout.minP) * S.chartLayout.yScale;
-  const gap = S.chartLayout.cW / (S.primary.turningPoints.length - 1);
+  const gap = S.chartLayout.cW / (prices.length - 1);
   const toX = i => S.chartLayout.left + i * gap;
-
   let d = `M ${toX(0)} ${changedIdx === 0 ? newY : toY(prices[0])}`;
   for (let i = 1; i < prices.length; i++) {
     const y = i === changedIdx ? newY : toY(prices[i]);
@@ -2220,155 +2246,32 @@ function updateZigzagPath(changedIdx, newY) {
 }
 
 window.addEventListener('resize', () => {
+  if (lcChart) lcChart.timeScale().fitContent();
   if (S.primary.turningPoints.length >= 2) drawChart();
 });
 
-// ====== Zoom / Pan (K线模式) ======
-chart.addEventListener('wheel', function(e) {
-  if (!S.primary.klines || !S.chartLayout || !S.chartLayout.klineMode) return;
-  e.preventDefault();
-  const pt = svgPoint(e);
-  if (!pt) return;
-  // Only zoom if cursor is inside chart area
-  if (pt.x < S.chartLayout.left || pt.x > S.chartLayout.left + S.chartLayout.cW) return;
-
-  const totalKlines = S.primary.klines.length;
-  if (S.klineViewEnd <= S.klineViewStart) {
-    S.klineViewStart = 0;
-    S.klineViewEnd = totalKlines;
-  }
-
-  const range = S.klineViewEnd - S.klineViewStart;
-  const frac = Math.max(0, Math.min(1, (pt.x - S.chartLayout.left) / S.chartLayout.cW));
-  const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-  let newRange = range * factor;
-  newRange = Math.max(10, Math.min(totalKlines, newRange));
-
-  let newStart = S.klineViewStart + frac * (range - newRange);
-  let newEnd = newStart + newRange;
-  if (newStart < 0) { newStart = 0; newEnd = newRange; }
-  if (newEnd > totalKlines) { newEnd = totalKlines; newStart = totalKlines - newRange; }
-
-  S.klineViewStart = Math.max(0, newStart);
-  S.klineViewEnd = Math.min(totalKlines, newEnd);
-  drawChart();
-}, { passive: false });
-
-chart.addEventListener('dblclick', function(e) {
-  if (!S.primary.klines) return;
-  S.klineViewStart = 0;
-  S.klineViewEnd = 0;
-  drawChart();
-});
-
-// ====== Crosshair (Binance K线模式) ======
-function initCrosshair() {
-  if (chart.querySelector('.crosshair-h')) return;
-  chart.appendChild(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: 0, stroke: "rgba(255,255,255,0.25)", "stroke-width": 0.5, "stroke-dasharray": "4,3", class: "crosshair-h", display: "none" }));
-  chart.appendChild(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: 0, stroke: "rgba(255,255,255,0.25)", "stroke-width": 0.5, "stroke-dasharray": "4,3", class: "crosshair-v", display: "none" }));
-  chart.appendChild(svgEl("rect", { x: 0, y: 0, width: 72, height: 18, fill: "#0f3460", stroke: "rgba(255,255,255,0.3)", "stroke-width": 0.5, rx: 3, class: "crosshair-y-bg", display: "none" }));
-  chart.appendChild(svgEl("text", { x: 0, y: 0, fill: "#e0e0e0", "font-size": 11, "font-family": "SF Mono,Menlo,monospace", "text-anchor": "end", class: "crosshair-y-label", display: "none" }));
-  chart.appendChild(svgEl("rect", { x: 0, y: 0, width: 30, height: 18, fill: "#0f3460", stroke: "rgba(255,255,255,0.3)", "stroke-width": 0.5, rx: 3, class: "crosshair-x-bg", display: "none" }));
-  chart.appendChild(svgEl("text", { x: 0, y: 0, fill: "#e0e0e0", "font-size": 11, "font-family": "SF Mono,Menlo,monospace", "text-anchor": "middle", class: "crosshair-x-label", display: "none" }));
-}
-
-chart.addEventListener('mousemove', function(e) {
-  if (!S.chartLayout) return;
-  if (S.isDragging || S.isDraggingZs || S.isPanning || S.drawingMode || S.drawZsMode || S.drawSegZsMode || S.drawHigherMode) return;
-  if (!S.primary.klines && !S.drawStrokeMode) return;
-
-  const pt = svgPoint(e);
-  if (!pt) return;
-
-  const { top, priceBottom, left, cW, priceH, minP, yScale, klineMode, W, H, macdBottom } = S.chartLayout;
-  const rightEdge = left + cW;
-
-  if (pt.x < left || pt.x > rightEdge || pt.y < top || pt.y > H - 30) {
-    hideCrosshair();
-    chart.querySelectorAll('.snap-preview').forEach(el => el.remove());
-    return;
-  }
-
-  // In drawStrokeMode, show snap preview instead of full crosshair
-  if (S.drawStrokeMode) {
-    chart.querySelectorAll('.snap-preview').forEach(el => el.remove());
-    if (S.primary.klines) {
-      const snap = findSnapPoint(pt);
-      if (snap) {
-        chart.appendChild(svgEl("circle", { cx: snap.x, cy: snap.y, r: 6, fill: snap.useHigh ? "rgba(255,80,80,0.6)" : "rgba(80,255,80,0.6)", stroke: "#fff", "stroke-width": 1.5, class: "snap-preview" }));
-        // Show price label
-        const yBg = chart.querySelector('.crosshair-y-bg');
-        yBg.setAttribute('x', left - 76);
-        yBg.setAttribute('y', snap.y - 9);
-        yBg.setAttribute('display', '');
-        const yLbl = chart.querySelector('.crosshair-y-label');
-        yLbl.setAttribute('x', left - 8);
-        yLbl.setAttribute('y', snap.y + 4);
-        yLbl.textContent = (Math.round(snap.price * 100) / 100).toString();
-        yLbl.setAttribute('display', '');
+// ====== Auto-load on page load ======
+document.addEventListener('DOMContentLoaded', async () => {
+  const statusEl = document.getElementById('binanceStatus');
+  try {
+    let status;
+    do {
+      const resp = await fetch('/api/prefetch/status');
+      status = await resp.json();
+      if (!status.complete) {
+        const done = Object.values(status.intervals || {}).filter(v => v !== 'pending').length;
+        const total = Object.keys(status.intervals || {}).length;
+        statusEl.textContent = `数据预热中... (${done}/${total})`;
+        statusEl.style.color = '#ffc832';
+        await new Promise(r => setTimeout(r, 2000));
       }
-    }
-    return;
+    } while (!status.complete);
+
+    statusEl.textContent = '预热完成，加载中...';
+    statusEl.style.color = '#ffc832';
+    await loadBinanceKlines();
+  } catch (err) {
+    statusEl.textContent = '自动加载失败: ' + err.message;
+    statusEl.style.color = '#ff6b6b';
   }
-
-  const hLine = chart.querySelector('.crosshair-h');
-  hLine.setAttribute('x1', left);
-  hLine.setAttribute('y1', pt.y);
-  hLine.setAttribute('x2', rightEdge);
-  hLine.setAttribute('y2', pt.y);
-  hLine.setAttribute('display', '');
-
-  const vLine = chart.querySelector('.crosshair-v');
-  vLine.setAttribute('x1', pt.x);
-  vLine.setAttribute('y1', top);
-  vLine.setAttribute('x2', pt.x);
-  vLine.setAttribute('y2', H - 30);
-  vLine.setAttribute('display', '');
-
-  // Price label (only when in price area)
-  if (pt.y >= top && pt.y <= priceBottom) {
-    const price = yToPrice(pt.y);
-    const priceStr = (Math.round(price * 100) / 100).toString();
-    const yBg = chart.querySelector('.crosshair-y-bg');
-    yBg.setAttribute('x', left - 76);
-    yBg.setAttribute('y', pt.y - 9);
-    yBg.setAttribute('display', '');
-    const yLbl = chart.querySelector('.crosshair-y-label');
-    yLbl.setAttribute('x', left - 8);
-    yLbl.setAttribute('y', pt.y + 4);
-    yLbl.textContent = priceStr;
-    yLbl.setAttribute('display', '');
-  } else {
-    chart.querySelector('.crosshair-y-bg').setAttribute('display', 'none');
-    chart.querySelector('.crosshair-y-label').setAttribute('display', 'none');
-  }
-
-  // Time label at bottom
-  if (klineMode && S.primary.klines) {
-    const timeMin = S.chartLayout.timeMin;
-    const timeRange = S.chartLayout.timeRange;
-    const t = timeMin + (pt.x - left) / cW * timeRange;
-    // Find nearest kline
-    const dt = new Date(t);
-    const txt = S.primaryInterval && (S.primaryInterval.includes('d') || S.primaryInterval === '1w' || S.primaryInterval === '1M')
-      ? `${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getDate().toString().padStart(2,'0')}`
-      : `${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
-    const xBg = chart.querySelector('.crosshair-x-bg');
-    xBg.setAttribute('x', pt.x - 20);
-    xBg.setAttribute('y', H - 28);
-    xBg.setAttribute('display', '');
-    const xLbl = chart.querySelector('.crosshair-x-label');
-    xLbl.setAttribute('x', pt.x);
-    xLbl.setAttribute('y', H - 16);
-    xLbl.textContent = txt;
-    xLbl.setAttribute('display', '');
-  }
-
 });
-
-chart.addEventListener('mouseleave', hideCrosshair);
-
-function hideCrosshair() {
-  chart.querySelectorAll('.crosshair-h,.crosshair-v,.crosshair-y-bg,.crosshair-y-label,.crosshair-x-bg,.crosshair-x-label').forEach(el => el.setAttribute('display', 'none'));
-  chart.querySelectorAll('.snap-preview').forEach(el => el.remove());
-}

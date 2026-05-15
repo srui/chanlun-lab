@@ -10,32 +10,56 @@ def _get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS klines (
+        """CREATE TABLE IF NOT EXISTS klines_v2 (
             symbol TEXT,
             interval TEXT,
+            market_type TEXT NOT NULL DEFAULT 'spot',
             open_time INTEGER,
             open REAL,
             high REAL,
             low REAL,
             close REAL,
             volume REAL,
-            PRIMARY KEY (symbol, interval, open_time)
+            PRIMARY KEY (symbol, interval, market_type, open_time)
         )"""
     )
+    # 迁移：如果旧表 klines 存在但没有 market_type 列，迁移数据
+    _migrate_v1(conn)
     return conn
 
 
-def save_klines(symbol, interval, klines):
+def _migrate_v1(conn):
+    """将旧表数据迁移到新表 v2。"""
+    try:
+        # 检查旧表是否存在
+        old = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='klines'").fetchone()
+        if not old:
+            return
+        # 检查是否已迁移过（新表有数据）
+        new_count = conn.execute("SELECT COUNT(*) FROM klines_v2").fetchone()[0]
+        old_count = conn.execute("SELECT COUNT(*) FROM klines").fetchone()[0]
+        if old_count > 0 and new_count == 0:
+            conn.execute(
+                "INSERT OR IGNORE INTO klines_v2 (symbol, interval, market_type, open_time, open, high, low, close, volume) "
+                "SELECT symbol, interval, 'spot', open_time, open, high, low, close, volume FROM klines"
+            )
+            conn.commit()
+            print(f"[cache] 迁移 {old_count} 条旧缓存数据到 klines_v2")
+    except Exception:
+        pass  # 迁移失败不影响运行
+
+
+def save_klines(symbol, interval, klines, market_type="spot"):
     """批量写入 K 线缓存。跳过最后一根（可能未收盘）。"""
     if not klines:
         return
     conn = _get_conn()
     try:
-        rows = klines[:-1]  # 最后一根可能未收盘，不缓存
+        rows = klines[:-1]
         conn.executemany(
-            "INSERT OR REPLACE INTO klines VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO klines_v2 VALUES (?,?,?,?,?,?,?,?,?)",
             [
-                (symbol, interval, k["openTime"], k["open"], k["high"],
+                (symbol, interval, market_type, k["openTime"], k["open"], k["high"],
                  k["low"], k["close"], k["volume"])
                 for k in rows
             ],
@@ -45,12 +69,12 @@ def save_klines(symbol, interval, klines):
         conn.close()
 
 
-def get_cached_klines(symbol, interval, start_ms=None, end_ms=None):
+def get_cached_klines(symbol, interval, start_ms=None, end_ms=None, market_type="spot"):
     """查询缓存，返回 list[dict]，按 openTime 升序。"""
     conn = _get_conn()
     try:
-        sql = "SELECT open_time, open, high, low, close, volume FROM klines WHERE symbol=? AND interval=?"
-        params = [symbol, interval]
+        sql = "SELECT open_time, open, high, low, close, volume FROM klines_v2 WHERE symbol=? AND interval=? AND market_type=?"
+        params = [symbol, interval, market_type]
         if start_ms is not None:
             sql += " AND open_time >= ?"
             params.append(start_ms)
@@ -76,13 +100,13 @@ def get_cached_klines(symbol, interval, start_ms=None, end_ms=None):
     ]
 
 
-def get_latest_cached_time(symbol, interval):
+def get_latest_cached_time(symbol, interval, market_type="spot"):
     """返回最新缓存时间戳，无缓存返回 None。"""
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT MAX(open_time) FROM klines WHERE symbol=? AND interval=?",
-            (symbol, interval),
+            "SELECT MAX(open_time) FROM klines_v2 WHERE symbol=? AND interval=? AND market_type=?",
+            (symbol, interval, market_type),
         ).fetchone()
     finally:
         conn.close()

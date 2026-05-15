@@ -2,6 +2,8 @@
 
 import sys
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 确保能找到 chanlun 包
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,20 +22,81 @@ from chanlun.algorithms import (
 from chanlun.binance_service import (
     fetch_klines,
     fetch_klines_cached,
+    fetch_klines_range,
     detect_fractals_from_klines,
     fractals_to_turning_points,
 )
 from chanlun.pipeline import analyze_klines, recompute_from_turning_points
-from chanlun.config import get_context_interval, get_poll_interval
+from chanlun.config import get_context_interval, get_poll_interval, PREFETCH_INTERVALS, PREFETCH_DAYS
 from chanlun.annotation_store import save_annotation, load_annotation, clear_annotation
 from chanlun.signal import compute_signal
+from chanlun.analysis_cache import get_cached_analysis, save_analysis, get_cache_status
+from chanlun.background_updater import start_updater, get_updater_status
 
 app = Flask(__name__)
+
+# 预热状态
+_prefetch_status = {"symbol": "BTCUSDT", "intervals": {}, "complete": False}
+
+
+def _run_prefetch(symbol="BTCUSDT"):
+    """后台线程：并发拉取所有预配置周期的 60 天数据。"""
+    _prefetch_status["symbol"] = symbol
+    _prefetch_status["complete"] = False
+    for iv in PREFETCH_INTERVALS:
+        _prefetch_status["intervals"][iv] = "pending"
+
+    def _fetch_one(iv):
+        try:
+            _, ok = fetch_klines_range(symbol, iv, days=PREFETCH_DAYS)
+            _prefetch_status["intervals"][iv] = "done" if ok else "failed"
+        except Exception as e:
+            print(f"[prefetch] {symbol} {iv} 异常: {e}")
+            _prefetch_status["intervals"][iv] = "failed"
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_fetch_one, iv): iv for iv in PREFETCH_INTERVALS}
+        for f in as_completed(futures):
+            f.result()
+
+    _prefetch_status["complete"] = True
+    print(f"[prefetch] 全部完成: {_prefetch_status['intervals']}")
+
+
+@app.route("/api/prefetch/status", methods=["GET"])
+def api_prefetch_status():
+    """返回预热进度。"""
+    return jsonify(_prefetch_status)
 
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("home.html")
+
+
+@app.route("/chart")
+def chart():
+    return render_template("chart.html")
+
+
+@app.route("/watchlist")
+def watchlist():
+    return render_template("watchlist.html")
+
+
+@app.route("/signals")
+def signals():
+    return render_template("signals.html")
+
+
+@app.route("/multi-tf")
+def multi_tf():
+    return render_template("multi-tf.html")
+
+
+@app.route("/settings")
+def settings():
+    return render_template("settings.html")
 
 
 @app.route("/api/compute/strokes", methods=["POST"])
@@ -48,7 +111,7 @@ def api_strokes():
         interval = data.get("interval", "4h")
         limit = data.get("limit", 200)
         try:
-            klines = fetch_klines(symbol, interval, limit, data.get("startTime"), data.get("endTime"))
+            klines = fetch_klines(symbol, interval, limit, data.get("startTime"), data.get("endTime"), market_type=data.get("marketType", "spot"))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -95,6 +158,22 @@ def api_recompute():
         return jsonify({"error": "至少需要4个转折点"}), 400
 
     return jsonify(recompute_from_turning_points(tp, min_segment_ratio))
+
+
+@app.route("/api/compute/analyze", methods=["POST"])
+def api_analyze():
+    """接收 K 线数组，运行完整分析流水线，返回全部分析结果。"""
+    data = request.get_json() or {}
+    klines = data.get("klines")
+
+    if not klines or len(klines) < 3:
+        return jsonify({"error": "K线数据不足（至少需要3条）"}), 400
+
+    min_kline_gap = data.get("minKlineGap", 4)
+    min_segment_ratio = data.get("minSegmentRatio", 0.05)
+
+    result = analyze_klines(klines, min_kline_gap, min_segment_ratio)
+    return jsonify(result)
 
 
 @app.route("/api/compute/zhongshu", methods=["POST"])
@@ -179,7 +258,7 @@ def api_compute_all():
     min_kline_gap = data.get("minKlineGap", 4)
 
     try:
-        klines = fetch_klines(symbol, interval, limit, start_time, end_time)
+        klines = fetch_klines(symbol, interval, limit, start_time, end_time, market_type=data.get("marketType", "spot"))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -197,18 +276,26 @@ def api_compute_all():
 
 @app.route("/api/compute/dual", methods=["POST"])
 def api_compute_dual():
-    """双周期分析：主周期 + 上下文周期，返回两组分析结果。"""
+    """双周期分析：主周期 + 上下文周期。优先返回缓存。"""
     data = request.get_json() or {}
     symbol = data.get("symbol", "BTCUSDT").upper()
     primary_interval = data.get("interval", "15m")
     limit = data.get("limit", 300)
     min_segment_ratio = data.get("minSegmentRatio", 0.05)
     min_kline_gap = data.get("minKlineGap", 4)
+    market_type = data.get("marketType", "spot")
 
+    # 尝试缓存
+    ttl = get_poll_interval(primary_interval)
+    cached = get_cached_analysis(symbol, primary_interval, ttl, market_type=market_type)
+    if cached is not None:
+        return jsonify({"primary": cached["primary"], "context": cached.get("context")})
+
+    # 缓存未命中 — 跑管线
     context_interval = data.get("contextInterval") or get_context_interval(primary_interval)
 
     try:
-        primary_klines = fetch_klines_cached(symbol, primary_interval, limit)
+        primary_klines = fetch_klines_cached(symbol, primary_interval, limit, market_type=market_type)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -226,7 +313,7 @@ def api_compute_dual():
     if context_interval:
         ctx_limit = max(50, limit // 4)
         try:
-            ctx_klines = fetch_klines_cached(symbol, context_interval, ctx_limit)
+            ctx_klines = fetch_klines_cached(symbol, context_interval, ctx_limit, market_type=market_type)
         except Exception:
             ctx_klines = []
 
@@ -236,7 +323,43 @@ def api_compute_dual():
             context["interval"] = context_interval
             context["klines"] = ctx_klines
 
+    # 存缓存
+    save_analysis(symbol, primary_interval, {
+        "primary": primary,
+        "context": context,
+        "signal": compute_signal(primary, context),
+    }, market_type=market_type)
+
     return jsonify({"primary": primary, "context": context})
+
+
+@app.route("/api/klines/older", methods=["GET"])
+def api_klines_older():
+    """从缓存加载更早的 K 线数据，用于前端增量加载。
+
+    参数：
+        symbol: 交易对
+        interval: 周期
+        beforeTime: 加载此时间戳之前的 K 线
+        count: 请求数量（默认 500）
+    """
+    from chanlun.kline_cache import get_cached_klines
+
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    interval = request.args.get("interval", "4h")
+    before_time = request.args.get("beforeTime", type=int)
+    count = request.args.get("count", 500, type=int)
+    market_type = request.args.get("marketType", "spot")
+
+    if before_time is None:
+        return jsonify({"error": "beforeTime required"}), 400
+
+    klines = get_cached_klines(symbol, interval, end_ms=before_time - 1, market_type=market_type)
+    # 取最后 count 根（最接近 beforeTime 的）
+    if len(klines) > count:
+        klines = klines[-count:]
+
+    return jsonify({"klines": klines, "count": len(klines)})
 
 
 @app.route("/api/compute/export", methods=["POST"])
@@ -326,16 +449,24 @@ def api_annotation_clear():
 
 @app.route("/api/signal", methods=["POST"])
 def api_signal():
-    """计算区间套信号状态。"""
+    """计算区间套信号状态。优先返回缓存。"""
     data = request.get_json() or {}
     symbol = data.get("symbol", "BTCUSDT").upper()
     interval = data.get("interval", "4h")
     limit = data.get("limit", 300)
     min_kline_gap = data.get("minKlineGap", 4)
     min_segment_ratio = data.get("minSegmentRatio", 0.05)
+    market_type = data.get("marketType", "spot")
 
+    # 尝试缓存
+    ttl = get_poll_interval(interval)
+    cached = get_cached_analysis(symbol, interval, ttl, market_type=market_type)
+    if cached is not None:
+        return jsonify({"signal": cached["signal"]})
+
+    # 缓存未命中 — 跑管线
     try:
-        primary_klines = fetch_klines_cached(symbol, interval, limit)
+        primary_klines = fetch_klines_cached(symbol, interval, limit, market_type=market_type)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -355,7 +486,7 @@ def api_signal():
     if context_interval:
         ctx_limit = max(50, limit // 4)
         try:
-            ctx_klines = fetch_klines_cached(symbol, context_interval, ctx_limit)
+            ctx_klines = fetch_klines_cached(symbol, context_interval, ctx_limit, market_type=market_type)
         except Exception:
             ctx_klines = []
 
@@ -364,7 +495,46 @@ def api_signal():
             context["interval"] = context_interval
 
     signal = compute_signal(primary, context)
+
+    # 存缓存
+    save_analysis(symbol, interval, {
+        "primary": primary,
+        "context": context,
+        "signal": signal,
+    }, market_type=market_type)
+
     return jsonify({"signal": signal})
+
+
+@app.route("/api/price", methods=["GET"])
+def api_price():
+    """返回最新K线价格（轻量接口，不跑分析管线）。"""
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    interval = request.args.get("interval", "4h")
+    market_type = request.args.get("marketType", "spot")
+
+    try:
+        klines = fetch_klines_cached(symbol, interval, 2, market_type=market_type)
+    except Exception as e:
+        return jsonify({"error": f"获取价格失败: {str(e)}"}), 502
+
+    if not klines:
+        return jsonify({"error": "无数据"}), 404
+
+    last = klines[-1]
+    prev = klines[-2] if len(klines) > 1 else last
+    change_pct = ((last["close"] - prev["close"]) / prev["close"] * 100) if prev["close"] else 0
+
+    return jsonify({
+        "symbol": symbol,
+        "interval": interval,
+        "price": last["close"],
+        "high": last["high"],
+        "low": last["low"],
+        "volume": last["volume"],
+        "openTime": last["openTime"],
+        "change": round(change_pct, 4),
+    })
 
 
 @app.route("/api/config/poll-interval", methods=["GET"])
@@ -374,5 +544,21 @@ def api_poll_interval():
     return jsonify({"interval": interval, "pollSeconds": get_poll_interval(interval)})
 
 
+@app.route("/api/cache/status", methods=["GET"])
+def api_cache_status():
+    """返回分析缓存状态和后台更新器信息。"""
+    return jsonify({
+        "cache": get_cache_status(),
+        "updater": get_updater_status(),
+    })
+
+
 if __name__ == "__main__":
+    t = threading.Thread(target=_run_prefetch, kwargs={"symbol": "BTCUSDT"}, daemon=True)
+    t.start()
+    print("[prefetch] 后台预热已启动，拉取 60 天数据...")
+
+    start_updater()
+    print("[updater] 后台分析缓存更新已启动...")
+
     app.run(debug=True, port=5000)

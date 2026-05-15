@@ -1,8 +1,10 @@
 """Binance K线获取 + 包含关系处理 + 顶底分型检测"""
 
+import time
 import requests
+from chanlun.config import MARKET_URLS
 
-BINANCE_BASE = "https://api.binance.com/api/v3/klines"
+BINANCE_BASE = MARKET_URLS["spot"]
 VALID_INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
 
 
@@ -89,7 +91,7 @@ def merge_klines_with_inclusion(klines):
     return merged
 
 
-def fetch_klines(symbol, interval, limit=500, start_time=None, end_time=None):
+def fetch_klines(symbol, interval, limit=500, start_time=None, end_time=None, market_type="spot"):
     """从 Binance 公共 API 获取 K 线数据，无需 API key。
     返回 [{"openTime", "open", "high", "low", "close", "volume", "closeTime"}, ...]
     """
@@ -106,7 +108,8 @@ def fetch_klines(symbol, interval, limit=500, start_time=None, end_time=None):
     if end_time is not None:
         params["endTime"] = int(end_time)
 
-    resp = requests.get(BINANCE_BASE, params=params, timeout=10)
+    url = MARKET_URLS.get(market_type, MARKET_URLS["spot"])
+    resp = requests.get(url, params=params, timeout=10)
     if resp.status_code == 400:
         data = resp.json()
         raise ValueError(data.get("msg", "Bad request"))
@@ -232,7 +235,7 @@ def fractals_to_turning_points(fractals, min_kline_gap=4):
     return turning_points, result
 
 
-def fetch_klines_cached(symbol, interval, limit=500, start_time=None, end_time=None):
+def fetch_klines_cached(symbol, interval, limit=500, start_time=None, end_time=None, market_type="spot"):
     """带缓存的 K 线获取。
 
     策略：
@@ -250,25 +253,72 @@ def fetch_klines_cached(symbol, interval, limit=500, start_time=None, end_time=N
 
     # 有 start_time/end_time 时无法简单利用缓存尾部，直接回退到 API
     if start_time is not None or end_time is not None:
-        klines = fetch_klines(symbol, interval, limit, start_time, end_time)
-        save_klines(symbol, interval, klines)
+        klines = fetch_klines(symbol, interval, limit, start_time, end_time, market_type=market_type)
+        save_klines(symbol, interval, klines, market_type=market_type)
         return klines
 
     # 查缓存
-    latest = get_latest_cached_time(symbol, interval)
+    latest = get_latest_cached_time(symbol, interval, market_type=market_type)
 
     if latest is not None:
         # 只拉缓存之后的数据
-        new_klines = fetch_klines(symbol, interval, limit, start_time=latest + 1)
+        new_klines = fetch_klines(symbol, interval, limit, start_time=latest + 1, market_type=market_type)
         if new_klines:
-            save_klines(symbol, interval, new_klines)
-        # 读取缓存中最近 limit 根（通过限制查询数量）
-        cached = get_cached_klines(symbol, interval)
+            save_klines(symbol, interval, new_klines, market_type=market_type)
+        # 读取缓存中最近 limit 根
+        cached = get_cached_klines(symbol, interval, market_type=market_type)
         combined = cached + new_klines
-        # 返回最近 limit 根
         return combined[-limit:] if len(combined) > limit else combined
     else:
         # 无缓存，直接 fetch
-        klines = fetch_klines(symbol, interval, limit)
-        save_klines(symbol, interval, klines)
+        klines = fetch_klines(symbol, interval, limit, market_type=market_type)
+        save_klines(symbol, interval, klines, market_type=market_type)
         return klines
+
+
+def fetch_klines_range(symbol, interval, days=60, retries=2, market_type="spot"):
+    """分页拉取指定天数的 K 线数据，自动落盘缓存。
+
+    Binance 单次最多 1000 条，此函数自动分页拉取所有数据。
+    失败时重试 retries 次后跳过。
+
+    返回 (klines_list, success_bool)
+    """
+    from chanlun.config import INTERVAL_MS
+    from chanlun.kline_cache import save_klines
+
+    if interval not in VALID_INTERVALS:
+        raise ValueError(f"Invalid interval: {interval}")
+
+    interval_ms = INTERVAL_MS[interval]
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - days * 86400000
+
+    all_klines = []
+    cursor = start_ms
+
+    while cursor < now_ms:
+        for attempt in range(retries + 1):
+            try:
+                batch = fetch_klines(symbol, interval, limit=1000, start_time=cursor, market_type=market_type)
+                break
+            except Exception as e:
+                if attempt < retries:
+                    time.sleep(1)
+                else:
+                    print(f"[prefetch] {symbol} {interval} 拉取失败 (cursor={cursor}): {e}")
+                    return all_klines, False
+
+        if not batch:
+            break
+
+        all_klines.extend(batch)
+        save_klines(symbol, interval, batch, market_type=market_type)
+
+        last_open_time = batch[-1]["openTime"]
+        if last_open_time <= cursor:
+            break
+        cursor = last_open_time + interval_ms
+
+    print(f"[prefetch] {symbol} {interval} ({market_type}) 完成，共 {len(all_klines)} 根 K 线")
+    return all_klines, True
