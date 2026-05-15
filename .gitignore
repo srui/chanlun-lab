@@ -7,3 +7,4 @@ venv/
 .env
 data/
 chanlun/test_segments.json
+_del/
